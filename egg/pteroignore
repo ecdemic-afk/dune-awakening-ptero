@@ -1,0 +1,16 @@
+# What Pterodactyl Backups leave out (same syntax as .gitignore).
+# Kept: config/, backups/ (database dumps — run `backup` first), and
+# server/state/ (world saves, identity, INI settings) minus the live database.
+server/*
+!server/state/
+server/state/pg/
+depot
+extracted/
+steamcmd/
+Steam/
+tools/
+logs/
+runtime/
+scripts/
+mock-k8s/
+data/

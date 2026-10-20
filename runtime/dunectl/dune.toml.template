@@ -1,0 +1,112 @@
+# ============================================================================
+#  Dune: Awakening server — configuration
+# ============================================================================
+#  Edit this file in Pterodactyl's File Manager, save, then type `restart` in
+#  the console. A typo is reported at boot with its line number; the server
+#  will not start on a broken file, it waits for the fix instead.
+#
+#  The token, server name, password, region and public IP are NOT here: they
+#  are on the Pterodactyl Startup tab.
+#
+#  Every value below is the default. Change only what you need.
+# ============================================================================
+
+[world]
+# Sietch name players see in game. The Startup tab's Sietch Name wins when
+# filled in; empty here and there = the Server Name.
+display_name = ""
+# Only when moving an EXISTING world to this server: paste its world name
+# (looks like sh-xxxxxxxx-abcdef). Leave empty for a new world.
+world_name_override = ""
+# Free-form label Funcom sees for your hosting location.
+datacenter_id = "pterodactyl"
+
+[ports]
+# All ports are counted from this server's PRIMARY allocation. In Pterodactyl,
+# allocate `block_size` consecutive ports starting at the primary one, and
+# forward them on your router. The console prints the exact range at boot.
+
+block_size = 40
+# UDP game servers: primary .. primary + game_slots - 1
+game_slots = 25
+# UDP Deep Desert / Arrakeen / Harko / extra-sietch instances, right after.
+dimension_slots = 5
+# TCP ports, as offsets from the primary allocation:
+mq_game_offset = 30     # RabbitMQ game broker (players connect here)
+mq_mgmt_offset = 31     # RabbitMQ management (players connect here)
+panel_offset = 32       # web panel
+
+[instances]
+# The Startup tab's map variables (Always-Running Maps, Max Running Maps, Stop
+# Empty Maps After, Deep Desert / Arrakeen / Harko Copies) override the values
+# below when they are filled in. Clear a variable to use the value here.
+
+# Most game servers running at once (each one uses a lot of RAM).
+max_concurrent = 8
+# Stop an empty on-demand map after this long, e.g. "10m", "1h".
+auto_stop = "10m"
+# Maps that are always running.
+always_warm = ["Survival_1", "Overmap", "DeepDesert_1"]
+# Extra copies ("dimensions") players can pick from. Each one is a full game
+# server (~5 GB of RAM) that runs all the time, and uses one dimension slot
+# from [ports]. Lowering a number keeps the extra copies' data but stops
+# starting them. The health check says how many fit in your memory.
+deep_desert_dimensions = 1
+arrakeen_dimensions = 0
+harko_dimensions = 0
+fallen_light = false
+fallen_light_dimensions = 0
+# Additional Hagga Basin sietches players can choose as home.
+extra_sietches = 0
+
+[gameplay]
+# Any server setting, by its id. The full list (241 settings, with defaults)
+# is in data/admin/settings-schema.json and on the web panel's Settings page.
+# Uncomment and change what you want, for example:
+#
+# mining_output = 2.0
+# vehicle_mining_output = 2.0
+# sandworms_enabled = true
+# sandstorms_enabled = true
+# force_pvp_everywhere = false
+# max_landclaim_segments = 6
+# building_restriction_limits = true
+# item_deterioration_rate = 1.0
+# server_player_hard_cap = 64
+
+# Deep Desert partitions that are PvP (8 = the main Deep Desert, 101-103 its
+# sandstorm instances). Empty = all PvE.
+pvp_partitions = []
+# Let players actually land in the Deep Desert instance they pick.
+deep_desert_picker_routing = true
+
+[updates]
+# Countdown players see before an `update` or `restart` (minutes) when
+# someone is online. Nobody online = no wait.
+warn_minutes = 10
+# Check Steam for a game update at every start (the Startup tab's
+# Auto Update switch overrides this when set).
+check_on_start = true
+
+[backups]
+# Database backups kept in backups/ (oldest removed first).
+keep = 7
+
+[discord]
+# The webhook URL is on the Startup tab. Which events to post:
+notify_start = true
+notify_crash = true
+notify_updates = true
+notify_backups = true
+notify_health = true
+notify_players = false   # every join/leave
+
+[advanced]
+# Battlegroup Director log level: Verbose, Debug, Information, Warning, Error.
+director_log_level = "Warning"
+# Seconds all game servers may be down before the supervisor restarts them.
+game_down_grace = 90
+# Seconds a core service may be down before the supervisor restarts it.
+core_down_grace = 20
+# Restarts allowed within 30 minutes before giving up and waiting for you.
+max_auto_restarts = 3

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+node_modules/
+.vscode/
+.idea/
+*.local.md

@@ -1,0 +1,885 @@
+#!/usr/bin/env python3
+"""Unattended scheduler (Phase 2): due-logic + run ledger + auto-restart /
+auto-backup tick loop. Mirrors admin_welcome (sqlite ledger + scan-loop). Config
+in server/state/admin/schedule.json (OFF default, persists reinstall); ledger in server/state/scheduler.db.
+
+Restart is NON-BLOCKING: when a restart slot is due, the loop broadcasts the
+in-game countdown (admin-publish shutdown Restart) and stores a pending restart at
+now+warn_lead; a later tick fires the Pelican client-API power:restart (a clean
+stop, which console.sh makes data-safe). Backup runs admin-publish db-backup.
+
+Pure due-logic (restart_due/backup_due/_slot_today/load_config) is unit-tested;
+the I/O (subprocess, HTTP, sqlite) is thin and isolated for monkeypatching.
+"""
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+
+# Sibling import (resolves whether run as a script, via importlib in tests, or -m),
+# mirroring admin-http.py. Gives the scale-instance task the shared mock-k8s
+# primitives without duplicating the CA-pinned transport.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from admin_instances import (  # noqa: E402
+    SCALABLE_MAPS,
+    SCALE_REPLICAS_MAX,
+    fetch_mock_status,
+    mock_k8s_request,
+    resolve_scale_key,
+)
+import admin_pelican  # noqa: E402  (sys.path; shared Pelican client-API access)
+
+DEFAULT_TICK_SECS = 30
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+PENDING_KEY = "pending_restart_at"
+# The announcement is armed separately from the restart so players get
+# silence until the warning window opens. See arm_restart().
+PENDING_WARN_KEY = "pending_warn_at"
+PENDING_WARN_SPEC = "pending_warn_spec"
+# A pending restart older than this is treated as debris (a crash, a clock
+# jump) and discarded rather than acted on. One tick is 30s; a container
+# that was down for an hour should not restart itself on the way up.
+STALE_RESTART_SECS = int(os.environ.get("DUNE_SCHEDULER_STALE_RESTART_SECS", "600"))
+
+# Generic scheduled-task framework (Phase 1). Tasks live in an array alongside
+# the special-cased restart/backup, each: {id, type, enabled, schedule, params}.
+# Their runs are recorded in the same ledger under task:<id>, so the existing
+# run-history surface shows them automatically.
+TASK_TYPES = ("broadcast", "scale-instance")
+_TASK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+DAILY_CATCHUP_GRACE_SECS = 3600  # don't fire a stale daily slot after this window
+
+DEFAULT_CONFIG = {
+    "restart": {"enabled": False, "time": "08:00", "days": list(DAYS),
+                "warn_lead_secs": 300, "warn_freq_secs": 60, "catch_up_grace_secs": 3600},
+    "backup": {"enabled": False, "every_hours": 24, "retention": 7},
+    "tasks": [],
+}
+
+
+def _now_dt():
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(s):
+    try:
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def config_path(base):
+    # Persistent (server/state/), not data/ (wiped on reinstall); seeded from the
+    # data/admin/ shipped default by prestart.sh. See admin_autoscaler.config_path.
+    return os.path.join(base, "server", "state", "admin", "schedule.json")
+
+
+def ledger_path(base):
+    return os.path.join(base, "server", "state", "scheduler.db")
+
+
+def load_config(base):
+    """Read schedule.json, shallow-merged over defaults so missing keys never crash."""
+    out = {"restart": dict(DEFAULT_CONFIG["restart"]),
+           "backup": dict(DEFAULT_CONFIG["backup"]),
+           "tasks": []}
+    try:
+        with open(config_path(base), encoding="utf-8") as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        return out
+    if isinstance(c, dict):
+        for k in ("restart", "backup"):
+            if isinstance(c.get(k), dict):
+                out[k].update(c[k])
+        if isinstance(c.get("tasks"), list):
+            out["tasks"] = c["tasks"]
+    return out
+
+
+def validate_config(raw):
+    """Validate + coerce a posted config to the canonical shape. Returns
+    (config, None) or (None, error). Pure (no I/O)."""
+    if not isinstance(raw, dict):
+        return None, "config must be an object"
+    r, b = raw.get("restart", {}), raw.get("backup", {})
+    if not isinstance(r, dict) or not isinstance(b, dict):
+        return None, "restart and backup must be objects"
+    out = {"restart": dict(DEFAULT_CONFIG["restart"]), "backup": dict(DEFAULT_CONFIG["backup"])}
+    out["restart"]["enabled"] = bool(r.get("enabled", False))
+    t = str(r.get("time", out["restart"]["time"]))
+    if _slot_today(_now_dt(), t) is None:
+        return None, "restart.time must be HH:MM"
+    out["restart"]["time"] = t
+    days = r.get("days", out["restart"]["days"])
+    if not isinstance(days, list) or not days or not all(d in DAYS for d in days):
+        return None, "restart.days must be a non-empty subset of mon..sun"
+    out["restart"]["days"] = [d for d in DAYS if d in days]  # canonical order, deduped
+    for k in ("warn_lead_secs", "warn_freq_secs", "catch_up_grace_secs"):
+        try:
+            out["restart"][k] = max(int(r.get(k, out["restart"][k])), 0)
+        except (TypeError, ValueError):
+            return None, f"restart.{k} must be an integer"
+    out["backup"]["enabled"] = bool(b.get("enabled", False))
+    try:
+        out["backup"]["every_hours"] = max(int(b.get("every_hours", 24)), 1)
+        out["backup"]["retention"] = max(int(b.get("retention", 7)), 1)
+    except (TypeError, ValueError):
+        return None, "backup.every_hours and backup.retention must be integers"
+    raw_tasks = raw.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return None, "tasks must be a list"
+    tasks, seen = [], set()
+    for i, t in enumerate(raw_tasks):
+        vt, err = validate_task(t)
+        if err or vt is None:
+            return None, f"tasks[{i}]: {err}"
+        if vt["id"] in seen:
+            return None, f"duplicate task id: {vt['id']}"
+        seen.add(vt["id"])
+        tasks.append(vt)
+    return {**out, "tasks": tasks}, None
+
+
+def _validate_schedule(raw):
+    """Validate + coerce a task schedule. Returns (schedule, None) or (None, err)."""
+    if not isinstance(raw, dict):
+        return None, "schedule must be an object"
+    kind = raw.get("kind")
+    if kind == "daily":
+        t = str(raw.get("time", "08:00"))
+        if _slot_today(_now_dt(), t) is None:
+            return None, "schedule.time must be HH:MM"
+        days = raw.get("days", list(DAYS))
+        if not isinstance(days, list) or not days or not all(d in DAYS for d in days):
+            return None, "schedule.days must be a non-empty subset of mon..sun"
+        return {"kind": "daily", "time": t, "days": [d for d in DAYS if d in days]}, None
+    if kind == "interval":
+        try:
+            every = int(raw.get("every_minutes", 60))
+        except (TypeError, ValueError):
+            return None, "schedule.every_minutes must be an integer"
+        if every < 1:
+            return None, "schedule.every_minutes must be >= 1"
+        return {"kind": "interval", "every_minutes": every}, None
+    return None, "schedule.kind must be 'daily' or 'interval'"
+
+
+def _coerce_bool(v):
+    """Coerce a config value to bool: real bools pass through; strings like
+    'true'/'1'/'yes'/'on' are truthy; everything else falls back to bool()."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _validate_task_params(ttype, raw):
+    """Validate + coerce per-type task params. Returns (params, None) or (None, err)."""
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        return None, "params must be an object"
+    if ttype == "broadcast":
+        title = str(raw.get("title", "")).strip()
+        body = str(raw.get("body", "")).strip()
+        if not title:
+            return None, "broadcast params.title required"
+        if not body:
+            return None, "broadcast params.body required"
+        try:
+            dur = max(int(raw.get("duration", 30)), 1)
+        except (TypeError, ValueError):
+            return None, "broadcast params.duration must be an integer"
+        return {"title": title[:200], "body": body[:500], "duration": dur}, None
+    if ttype == "scale-instance":
+        mp = raw.get("map")
+        if mp not in SCALABLE_MAPS:
+            return None, f"scale-instance params.map must be one of: {', '.join(SCALABLE_MAPS)}"
+        replicas = raw.get("replicas")
+        if isinstance(replicas, bool) or not isinstance(replicas, (int, str)):
+            return None, "scale-instance params.replicas must be an integer"
+        try:
+            replicas = int(replicas)
+        except (TypeError, ValueError):
+            return None, "scale-instance params.replicas must be an integer"
+        if replicas < 0 or replicas > SCALE_REPLICAS_MAX:
+            return None, f"scale-instance params.replicas must be 0-{SCALE_REPLICAS_MAX}"
+        return {"map": mp, "replicas": replicas, "force": _coerce_bool(raw.get("force", False))}, None
+    return {}, None
+
+
+def validate_task(raw):
+    """Validate + coerce one generic task. Returns (task, None) or (None, err). Pure."""
+    if not isinstance(raw, dict):
+        return None, "task must be an object"
+    tid = str(raw.get("id", "")).strip()
+    if not _TASK_ID_RE.match(tid):
+        return None, "id must match [a-z0-9][a-z0-9_-]{0,63}"
+    ttype = raw.get("type")
+    if ttype not in TASK_TYPES:
+        return None, f"type must be one of: {', '.join(TASK_TYPES)}"
+    sched, err = _validate_schedule(raw.get("schedule"))
+    if err:
+        return None, err
+    params, err = _validate_task_params(ttype, raw.get("params"))
+    if err:
+        return None, err
+    return {"id": tid, "type": ttype, "enabled": bool(raw.get("enabled", False)),
+            "schedule": sched, "params": params}, None
+
+
+def save_config(base, config):
+    path = config_path(base)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    os.replace(tmp, path)  # atomic
+
+
+def _slot_today(now, hhmm):
+    try:
+        h, m = (int(x) for x in str(hhmm).split(":"))
+        return now.replace(hour=h, minute=m, second=0, microsecond=0)
+    except (ValueError, AttributeError):
+        return None  # bad format OR out-of-range hour/minute (replace raises ValueError)
+
+
+def restart_due(rcfg, now, last_warn):
+    """True if a restart should be WARNED now: enabled, today is an allowed day,
+    now is within [slot, slot+grace), and we haven't already warned this slot."""
+    if not rcfg.get("enabled"):
+        return False
+    if DAYS[now.weekday()] not in (rcfg.get("days") or DAYS):
+        return False
+    slot = _slot_today(now, rcfg.get("time", "08:00"))
+    if slot is None or now < slot:
+        return False
+    grace = max(int(rcfg.get("catch_up_grace_secs", 3600)), 0)
+    if now >= slot + timedelta(seconds=grace):
+        return False  # missed the window — don't fire a stale catch-up restart
+    lw = _parse_iso(last_warn)
+    if lw is not None and lw >= slot:
+        return False  # already warned for this slot
+    return True
+
+
+def backup_due(bcfg, now, last_backup):
+    if not bcfg.get("enabled"):
+        return False
+    lb = _parse_iso(last_backup)
+    if lb is None:
+        return True
+    return now >= lb + timedelta(hours=max(int(bcfg.get("every_hours", 24)), 1))
+
+
+def task_due(task, now, last_run):
+    """True if a generic task should fire now. Pure. Mirrors restart/backup due-logic:
+    'daily' fires once per slot within a catch-up grace; 'interval' fires every N
+    minutes (and immediately when never run, like backup)."""
+    if not task.get("enabled"):
+        return False
+    sched = task.get("schedule") or {}
+    kind = sched.get("kind")
+    if kind == "interval":
+        try:
+            every = max(int(sched.get("every_minutes", 60)), 1)
+        except (TypeError, ValueError):
+            return False
+        lr = _parse_iso(last_run)
+        return lr is None or now >= lr + timedelta(minutes=every)
+    if kind == "daily":
+        if DAYS[now.weekday()] not in (sched.get("days") or DAYS):
+            return False
+        slot = _slot_today(now, sched.get("time", "08:00"))
+        if slot is None or now < slot:
+            return False
+        if now >= slot + timedelta(seconds=DAILY_CATCHUP_GRACE_SECS):
+            return False  # missed the window — don't fire a stale catch-up
+        lr = _parse_iso(last_run)
+        return lr is None or lr < slot  # not already fired this slot
+    return False
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scheduler_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task TEXT NOT NULL, status TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '', at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS scheduler_state (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+"""
+
+
+class SchedulerLedger:
+    def __init__(self, path):
+        # Create the state directory rather than failing with a bare
+        # sqlite3.OperationalError: these commands are reachable from the
+        # admin panel now, and an unhandled traceback there reads as a bug
+        # in the panel rather than a missing directory.
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self.conn = sqlite3.connect(path)
+        self.conn.executescript(_SCHEMA)
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+    def record(self, task, status, detail=""):
+        self.conn.execute(
+            "INSERT INTO scheduler_runs (task,status,detail,at) VALUES (?,?,?,?)",
+            (task, status, (detail or "")[:500], _iso(_now_dt())))
+        self.conn.commit()
+
+    def last(self, task):
+        cur = self.conn.execute(
+            "SELECT at FROM scheduler_runs WHERE task=? ORDER BY id DESC LIMIT 1", (task,))
+        r = cur.fetchone()
+        return r[0] if r else None
+
+    def last_settled(self, task):
+        """Most recent run that SETTLED the schedule slot (status ok or skipped) —
+        excludes 'error' so a transient failure self-heals on the next tick within
+        the catch-up grace instead of consuming the slot. Used for generic tasks[]
+        dedupe; restart/backup keep their own last()-based logic."""
+        cur = self.conn.execute(
+            "SELECT at FROM scheduler_runs WHERE task=? AND status IN ('ok','skipped') "
+            "ORDER BY id DESC LIMIT 1", (task,))
+        r = cur.fetchone()
+        return r[0] if r else None
+
+    def list_runs(self, limit=50):
+        limit = 50 if (limit <= 0 or limit > 500) else limit
+        cur = self.conn.execute(
+            "SELECT task,status,detail,at FROM scheduler_runs ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(zip(["task", "status", "detail", "at"], row)) for row in cur.fetchall()]
+
+    def get_state(self, k):
+        cur = self.conn.execute("SELECT v FROM scheduler_state WHERE k=?", (k,))
+        r = cur.fetchone()
+        return r[0] if r else None
+
+    def set_state(self, k, v):
+        self.conn.execute(
+            "INSERT INTO scheduler_state (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
+        self.conn.commit()
+
+    def clear_state(self, k):
+        self.conn.execute("DELETE FROM scheduler_state WHERE k=?", (k,))
+        self.conn.commit()
+
+
+# -- task runners (I/O; isolated so run_tick can be tested with fakes) ----------
+def _publish(base):
+    return os.path.join(base, "scripts", "admin-publish.sh")
+
+
+def restart_configured():
+    # admin_pelican owns the rule (the server id falls back to Wings' P_SERVER_UUID).
+    return admin_pelican.configured()
+
+
+def run_backup(base):
+    try:
+        r = subprocess.run(["bash", _publish(base), "db-backup"],
+                           capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"backup error: {e}"[:300]
+    ok = r.returncode == 0 and "backup=ok" in r.stdout
+    if ok:
+        return True, (r.stdout.strip().splitlines() or [""])[-1]
+    return False, (r.stderr.strip()[:300] or "pg_dump failed")
+
+
+def run_broadcast(base, params):
+    """admin-publish broadcast <title> <body> <duration>. Returns (ok, detail)."""
+    params = params or {}
+    title = str(params.get("title", "")).strip()
+    body = str(params.get("body", "")).strip()
+    if not title or not body:
+        return False, "broadcast: title and body required"
+    try:
+        dur = max(int(params.get("duration", 30)), 1)
+    except (TypeError, ValueError):
+        dur = 30
+    try:
+        r = subprocess.run(["bash", _publish(base), "broadcast", title, body, str(dur)],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"broadcast error: {e}"[:300]
+    return r.returncode == 0, (r.stdout.strip() or r.stderr.strip())[:300]
+
+
+def online_count_for_map(base, mp):
+    """LIVE connected-player count on one map via admin-publish farm-player-count
+    (sum of farm_state.connected_players). Returns the count, or None if it could NOT
+    be confirmed (subprocess / non-zero exit / parse failure) — distinct from a genuine
+    0 so the scale-down guard can fail safe rather than evicting players on an unreadable
+    status. Uses farm-player-count, NOT server-status: server-status keys on the
+    character's actor map ("HarkoVillage"), missing hub VISITORS for the SSS map name
+    (SH_HarkoVillage) and so reading a populated hub as empty. Isolated for monkeypatch."""
+    try:
+        r = subprocess.run(["bash", _publish(base), "farm-player-count"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        import admin_status  # noqa: PLC0415 - lazy: only the scale guard needs it
+        return int(admin_status.parse_player_counts(r.stdout).get(mp, 0) or 0)
+    except Exception:  # noqa: BLE001 - couldn't parse -> unconfirmed, not zero
+        return None
+
+
+def run_scale_instance(base, task):
+    """Scale a map to params.replicas via mock-k8s ServerSetScale. Returns
+    (status, detail) with status in (ok|skipped|error). Idempotent no-op when
+    already at target; a scale-down with players online is skipped unless force.
+    Mechanism (fetch/resolve/PATCH) is shared via admin_instances; the guard +
+    idempotency policy live here (the interactive endpoint owns its own)."""
+    p = task.get("params") or {}
+    mp, replicas, force = p.get("map"), p.get("replicas"), bool(p.get("force", False))
+    if mp not in SCALABLE_MAPS or not isinstance(replicas, int) or isinstance(replicas, bool):
+        return "error", f"invalid scale params: map={mp!r} replicas={replicas!r}"
+    mock = fetch_mock_status()
+    if not mock:
+        return "error", "mock-k8s /status unreachable"
+    key = resolve_scale_key(mock, mp)
+    if key is None:
+        return "error", f"{mp} not tracked by mock-k8s"
+    ns, name, current = key
+    if replicas == current:
+        return "ok", f"already at {replicas}"
+    if replicas < current and not force:
+        online = online_count_for_map(base, mp)
+        if online is None:
+            return "skipped", f"could not confirm players on {mp}; not scaled (force=false)"
+        if online > 0:
+            return "skipped", f"{online} player(s) online on {mp}; not scaled (force=false)"
+    code, _ = mock_k8s_request(
+        "PATCH", f"/apis/igw.funcom.com/v1/namespaces/{ns}/serversetscales/{name}",
+        {"spec": {"replicas": replicas}})
+    if code is None or code >= 300:
+        return "error", f"mock-k8s scale failed (http {code})"
+    return "ok", f"scaled {mp} {current}->{replicas}"
+
+
+def run_task(base, task):
+    """Dispatch one generic scheduled task by type. Returns (status, detail) with
+    status in (ok|error|skipped). I/O; isolated for monkeypatch."""
+    ttype = task.get("type")
+    if ttype == "broadcast":
+        ok, detail = run_broadcast(base, task.get("params") or {})
+        return ("ok" if ok else "error"), detail
+    if ttype == "scale-instance":
+        return run_scale_instance(base, task)
+    return "error", f"unknown task type: {ttype}"
+
+
+def broadcast_restart(base, lead, freq):
+    try:
+        r = subprocess.run(["bash", _publish(base), "shutdown", "Restart", str(lead), str(freq)],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"broadcast error: {e}"[:300]
+    return r.returncode == 0, (r.stdout.strip() or r.stderr.strip())[:300]
+
+
+# --------------------------------------------------------------------------
+# Panel access lives in admin_pelican now — the admin panel needs the same
+# connection handling (including the `curl --resolve` override) to keep a
+# setting's egg variable in step, and two copies of that would drift.
+# The private names below are kept as aliases so this module's callers and
+# tests are unaffected by the move.
+# --------------------------------------------------------------------------
+_ResolvingHTTPSConnection = admin_pelican.ResolvingHTTPSConnection
+_clean_setting = admin_pelican.clean_setting
+_restart_hint = admin_pelican.restart_hint
+_redact = admin_pelican.redact
+_HEADER_UNSAFE = admin_pelican._HEADER_UNSAFE
+
+
+def _power_endpoint(url, sid):
+    """Pure: parse (scheme, host, port, path) for a server's power endpoint."""
+    scheme, host, port = admin_pelican.split_url(url)
+    return scheme, host, port, f"/api/client/servers/{sid}/power"
+
+
+def _open_power_conn(scheme, host, port, resolve_ip, timeout):
+    """Build the HTTP(S) connection for the power POST. When resolve_ip is set
+    the TCP target is overridden to that IP (SNI/cert/Host stay `host`)."""
+    return admin_pelican.open_conn(scheme, host, port, resolve_ip, timeout)
+
+
+def pelican_restart():
+    """POST the Pelican client-API power:restart. Needs DUNE_PELICAN_URL +
+    DUNE_PELICAN_CLIENT_KEY env (server id: DUNE_PELICAN_SERVER_ID or Wings'
+    P_SERVER_UUID). Optional
+    DUNE_PELICAN_RESOLVE pins the TCP target to a given IP (curl --resolve
+    style) so an in-container restart can bypass a CDN in front of the panel."""
+    return admin_pelican.restart()
+
+
+def arm_restart(ledger, restart_at, warn_window_secs, warn_freq_secs, stype="Restart"):
+    """Arm a restart at `restart_at`, with the in-game countdown starting
+    `warn_window_secs` before it.
+
+    The countdown cannot be expressed as "quiet, then warn" in a single
+    envelope: the game banners every BroadcastFrequency from the moment it
+    receives one until ShutdownTimestamp. Announcing an 8-hour restart up
+    front therefore means eight hours of banners — 480 of them at the old
+    60s default. So the announcement is *armed* here and published later,
+    at restart_at - warn_window, with a lead of exactly the time then
+    remaining. Players get silence until the window opens."""
+    window = max(int(warn_window_secs), 0)
+    ledger.set_state(PENDING_KEY, _iso(restart_at))
+    ledger.set_state(PENDING_WARN_KEY, _iso(restart_at - timedelta(seconds=window)))
+    ledger.set_state(PENDING_WARN_SPEC, json.dumps(
+        {"type": str(stype), "freq_secs": max(int(warn_freq_secs), 1)}))
+
+
+def cancel_restart(base, ledger):
+    """Disarm both halves. Returns (ok, detail). If the announcement has
+    already gone out, players are told it is off — otherwise they would
+    keep counting down to a restart that is no longer coming."""
+    announced = ledger.get_state(PENDING_WARN_KEY) is None and \
+        ledger.get_state(PENDING_KEY) is not None
+    ledger.clear_state(PENDING_KEY)
+    ledger.clear_state(PENDING_WARN_KEY)
+    ledger.clear_state(PENDING_WARN_SPEC)
+    if not announced:
+        return True, "pending restart cancelled (no announcement had gone out)"
+    try:
+        r = subprocess.run(["bash", _publish(base), "shutdown", "cancel"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"disarmed, but the in-game countdown could not be cancelled: {e}"[:300]
+    ok = r.returncode == 0
+    return ok, ("pending restart cancelled, in-game countdown withdrawn" if ok
+                else f"disarmed, but the cancel broadcast failed: {(r.stderr or r.stdout).strip()[:200]}")
+
+
+# ACME renewal. Certificates last 90 days; renewing below 30 leaves four
+# weeks to notice a failure, which is the margin every ACME client uses.
+CERT_RENEW_BELOW_DAYS = int(os.environ.get("DUNE_ACME_RENEW_BELOW_DAYS", "30"))
+CERT_CHECK_EVERY_SECS = 12 * 3600
+_cert_run_lock = threading.Lock()
+
+
+def certificate_paths(base):
+    tls = os.path.join(base, "server", "state", "tls")
+    return (os.path.join(tls, "fullchain.pem"), os.path.join(tls, "privkey.pem"),
+            os.path.join(tls, "account.key"), os.path.join(tls, "panel.csr"))
+
+
+def certificate_due(base, last_check_iso, now=None):
+    """Should we look at the certificate on this tick?
+
+    True immediately when ACME is configured and there is no certificate at
+    all — a first boot should not wait twelve hours for HTTPS."""
+    if not (os.environ.get("DUNE_ACME_DNS_BACKEND") or "").strip():
+        return False
+    cert, _key, _acct, _csr = certificate_paths(base)
+    if not os.path.isfile(cert):
+        return True
+    last = _parse_iso(last_check_iso)
+    if last is None:
+        return True
+    return ((now or _now_dt()) - last).total_seconds() >= CERT_CHECK_EVERY_SECS
+
+
+def renew_certificate(base):
+    """Issue or renew, in the caller's thread. Returns (ok, detail).
+
+    Left importable and synchronous so it can be driven from the CLI; the
+    tick calls it on a thread because a DNS-01 order can take minutes and
+    blocking the loop that long would delay an armed restart past the
+    staleness guard, which would then discard it."""
+    import admin_acme
+    import admin_acme_dns
+    cert_path, key_path, account_path, csr_path = certificate_paths(base)
+    domain = (os.environ.get("DUNE_ACME_DOMAIN")
+              or os.environ.get("DUNE_ADMIN_UI_DOMAIN") or "").strip()
+    if not domain:
+        return False, ("no domain to certify: set DUNE_ADMIN_UI_DOMAIN "
+                       "(or DUNE_ACME_DOMAIN) to the hostname browsers use")
+    remaining = admin_acme.days_remaining(cert_path)
+    if remaining is not None and remaining > CERT_RENEW_BELOW_DAYS:
+        return True, f"certificate for {domain} still valid for {remaining} days"
+    try:
+        publisher = admin_acme_dns.from_env(base)
+        if publisher is None:
+            return False, "DUNE_ACME_DNS_BACKEND is not set"
+        os.makedirs(os.path.dirname(cert_path), exist_ok=True)
+        admin_acme.generate_account_key(account_path)
+        admin_acme.generate_csr(key_path, domain, csr_path)
+        staging = (os.environ.get("DUNE_ACME_STAGING") or "").strip().lower() in ("1", "true", "yes", "on")
+        chain = admin_acme.issue(
+            domain, account_path, csr_path, publisher,
+            directory_url=admin_acme.STAGING_DIRECTORY if staging else admin_acme.DEFAULT_DIRECTORY,
+            contact=(os.environ.get("DUNE_ACME_EMAIL") or "").strip() or None,
+            log=lambda m: print(f"[scheduler] acme: {m}", flush=True))
+    except Exception as exc:  # noqa: BLE001 — every failure is the operator's to read
+        return False, f"certificate renewal failed: {exc}"[:400]
+    # Written last and atomically: admin-http watches this path and reloads
+    # on change, so a half-written file would be picked up mid-write.
+    tmp = cert_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(chain)
+    os.replace(tmp, cert_path)
+    note = " (STAGING — not trusted by browsers)" if staging else ""
+    return True, f"certificate issued for {domain}{note}"
+
+
+def _renew_in_background(base, ledger_path_str):
+    """One at a time, and never inside the tick."""
+    if not _cert_run_lock.acquire(blocking=False):
+        return
+    def work():
+        try:
+            ok, detail = renew_certificate(base)
+            led = SchedulerLedger(ledger_path_str)
+            led.record("certificate", "ok" if ok else "error", detail)
+            led.close()
+            print(f"[scheduler] certificate ok={ok} {detail}", flush=True)
+        finally:
+            _cert_run_lock.release()
+    threading.Thread(target=work, daemon=True, name="acme-renew").start()
+
+
+def run_tick(base, ledger, now=None, cfg=None):
+    """One scheduler tick. Returns a list of (task, ok, detail) actions taken."""
+    now = now or _now_dt()
+    cfg = cfg or load_config(base)
+    actions = []
+
+    # 1) fire a pending restart whose countdown has elapsed.
+    #
+    # CONSUME THE INTENT FIRST. The call below asks the panel to restart
+    # this very container, and Wings has been observed completing that in
+    # five seconds — so anything written afterwards may never land. Clearing
+    # after firing produced four restarts in 78 seconds on a live server:
+    # each new boot read a still-armed, past-due restart and fired again.
+    # At-most-once is the only safe semantics for an action this
+    # destructive; losing one restart is recoverable, a loop is not.
+    pend = _parse_iso(ledger.get_state(PENDING_KEY))
+    if pend is not None and now >= pend:
+        overdue = (now - pend).total_seconds()
+        ledger.clear_state(PENDING_KEY)
+        ledger.clear_state(PENDING_WARN_KEY)
+        ledger.clear_state(PENDING_WARN_SPEC)
+        if overdue > STALE_RESTART_SECS:
+            # Second line of defence: an intent this old is a leftover from
+            # a crash or a clock jump, not something anyone is waiting for.
+            # Restarting the server on it would be a surprise.
+            detail = (f"discarded a restart armed for {_iso(pend)} — "
+                      f"{int(overdue)}s overdue, too stale to act on")
+            ledger.record("restart", "skipped", detail)
+            return [("restart", False, detail)]
+        # Record the attempt BEFORE the call, for the same reason the state
+        # is cleared before it: this process rarely outlives the restart it
+        # asks for, so a row written afterwards usually never lands. Without
+        # this the run history shows a restart being armed and announced and
+        # then simply stops, which reads as though it never happened.
+        #
+        # Logged as "ok" deliberately: anything else renders as a red error
+        # pill in the Scheduler tab, and a restart that worked must not look
+        # like a failure. A failure adds its own row below, which does land
+        # precisely because the container is then still up.
+        ledger.record("restart", "ok", f"triggered; armed for {_iso(pend)}")
+        ok, detail = pelican_restart()
+        if not ok:
+            ledger.record("restart", "error", detail)
+        return [("restart", ok, detail)]  # container is restarting — stop here
+
+    # 2) arm from the recurring schedule, if a slot is due
+    rcfg = cfg.get("restart", {})
+    if pend is None and restart_due(rcfg, now, ledger.last("restart-warn")):
+        if not restart_configured():
+            ledger.record("restart-warn", "skipped",
+                          "auto-restart enabled but DUNE_PELICAN_URL + DUNE_PELICAN_CLIENT_KEY unset")
+            actions.append(("restart-warn", False, "not configured"))
+        else:
+            # The announcement window is the whole lead here, i.e. announce
+            # immediately — what this path has always done. Step 3 below
+            # publishes it on this very tick, so behaviour is unchanged.
+            lead = max(int(rcfg.get("warn_lead_secs", 300)), 0)
+            pend = now + timedelta(seconds=lead)
+            arm_restart(ledger, pend, lead, int(rcfg.get("warn_freq_secs", 60)))
+
+    # 3) publish the in-game countdown once its window opens. Deliberately
+    # after arming, so a slot armed on this tick announces on this tick.
+    # The lead is the time actually REMAINING, computed now, so the banner
+    # lands on the restart rather than on the moment it was armed.
+    warn_at = _parse_iso(ledger.get_state(PENDING_WARN_KEY))
+    if pend is not None and warn_at is not None and now >= warn_at:
+        try:
+            spec = json.loads(ledger.get_state(PENDING_WARN_SPEC) or "{}")
+        except ValueError:
+            spec = {}
+        remaining = max(int((pend - now).total_seconds()), 1)
+        ok, detail = broadcast_restart(base, remaining, int(spec.get("freq_secs", 60)))
+        ledger.clear_state(PENDING_WARN_KEY)
+        ledger.record("restart-warn", "ok" if ok else "error", detail)
+        actions.append(("restart-warn", ok, detail))
+
+    # 3) backup, if due
+    bcfg = cfg.get("backup", {})
+    if backup_due(bcfg, now, ledger.last("backup")):
+        ok, detail = run_backup(base)
+        ledger.record("backup", "ok" if ok else "error", detail)
+        actions.append(("backup", ok, detail))
+
+    # 3b) TLS certificate, if ACME is configured and it is time to look.
+    # Dispatched to a thread: a DNS-01 order waits on DNS propagation and can
+    # take minutes, and blocking the loop that long would push an armed
+    # restart past STALE_RESTART_SECS, where it would be discarded instead of
+    # fired. The thread records its own result.
+    if certificate_due(base, ledger.last("certificate"), now):
+        ledger.record("certificate", "skipped", "checking")
+        _renew_in_background(base, ledger_path(base))
+        actions.append(("certificate", True, "renewal check started"))
+
+    # 4) generic scheduled tasks (broadcast, scale-instance, ...). One bad task
+    # never kills the rest. Dedupe keys off last_settled (ok/skipped) so a
+    # transient error self-heals on the next tick instead of poisoning the slot.
+    for task in (cfg.get("tasks") or []):
+        key = f"task:{task.get('id', '?')}"
+        # Dedupe source is kind-aware: a daily slot keys off last_settled (ok/skipped)
+        # so a transient error retries within the catch-up grace; an interval keys off
+        # last() (any terminal run, incl. error) so it respects every_minutes and does
+        # not storm every tick while erroring.
+        kind = (task.get("schedule") or {}).get("kind")
+        last = ledger.last(key) if kind == "interval" else ledger.last_settled(key)
+        try:
+            if task_due(task, now, last):
+                status, detail = run_task(base, task)
+                ledger.record(key, status, detail)
+                actions.append((key, status == "ok", detail))
+        except Exception as e:  # noqa: BLE001 - isolate one task's failure from the loop
+            ledger.record(key, "error", f"task error: {e}"[:200])
+            actions.append((key, False, f"task error: {e}"[:200]))
+
+    return actions
+
+
+def _main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    base = argv[2] if len(argv) > 2 else os.environ.get("DUNE_BASE_DIR", "/home/container")
+    if cmd == "status":
+        led = SchedulerLedger(ledger_path(base))
+        out = {"ok": True, "config": load_config(base), "runs": led.list_runs(20),
+               "pending_restart": led.get_state(PENDING_KEY),
+               "restart_configured": restart_configured()}
+        led.close()
+        print(json.dumps(out))
+        return 0
+    if cmd == "runs":
+        led = SchedulerLedger(ledger_path(base))
+        n = int(argv[3]) if len(argv) > 3 and argv[3].isdigit() else 50
+        print(json.dumps({"ok": True, "runs": led.list_runs(n)}))
+        led.close()
+        return 0
+    if cmd in ("run-backup", "run-restart"):
+        led = SchedulerLedger(ledger_path(base))
+        if cmd == "run-backup":
+            ok, detail = run_backup(base)
+            led.record("backup", "ok" if ok else "error", detail)
+        elif not restart_configured():
+            led.record("restart-warn", "skipped", "not configured")
+            ok, detail = False, "auto-restart needs DUNE_PELICAN_URL + DUNE_PELICAN_CLIENT_KEY"
+        else:
+            rcfg = load_config(base).get("restart", {})
+            lead = max(int(rcfg.get("warn_lead_secs", 300)), 0)
+            ok, detail = broadcast_restart(base, lead, int(rcfg.get("warn_freq_secs", 60)))
+            led.set_state(PENDING_KEY, _iso(_now_dt() + timedelta(seconds=lead)))
+            led.record("restart-warn", "ok" if ok else "error", detail)
+        led.close()
+        print(json.dumps({"ok": ok, "detail": detail}))
+        return 0
+    if cmd == "run-task":
+        tid = argv[3] if len(argv) > 3 else ""
+        led = SchedulerLedger(ledger_path(base))
+        task = next((t for t in load_config(base).get("tasks", []) if t.get("id") == tid), None)
+        if task is None:
+            led.close()
+            print(json.dumps({"ok": False, "error": f"no task with id {tid!r}"}))
+            return 1
+        status, detail = run_task(base, task)
+        led.record(f"task:{tid}", status, detail)
+        led.close()
+        print(json.dumps({"ok": status == "ok", "status": status, "detail": detail}))
+        return 0
+    if cmd == "set-config":
+        raw = argv[3] if len(argv) > 3 else ""
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            print(json.dumps({"ok": False, "error": "invalid JSON"}))
+            return 1
+        cfg, err = validate_config(parsed)
+        if err:
+            print(json.dumps({"ok": False, "error": err}))
+            return 1
+        save_config(base, cfg)
+        print(json.dumps({"ok": True, "config": cfg}))
+        return 0
+    if cmd == "scan-loop":
+        led = SchedulerLedger(ledger_path(base))
+        while True:
+            try:
+                for (t, ok, d) in run_tick(base, led):
+                    print(f"[scheduler] {t} ok={ok} {d}", flush=True)
+            except Exception as e:  # never let the loop die
+                print(f"[scheduler] tick error: {e}", flush=True)
+            time.sleep(DEFAULT_TICK_SECS)
+    if cmd == "arm-restart":
+        # arm-restart BASE <delay_secs> <warn_window_secs> <warn_freq_secs>
+        try:
+            delay = max(int(argv[3]), 0)
+            window = max(int(argv[4]), 0)
+            freq = max(int(argv[5]), 1)
+        except (IndexError, ValueError):
+            print(json.dumps({"ok": False, "error":
+                              "usage: arm-restart BASE <delay_secs> <warn_window_secs> <warn_freq_secs>"}))
+            return 2
+        if not restart_configured():
+            print(json.dumps({"ok": False, "error":
+                              "restart needs DUNE_PELICAN_URL + DUNE_PELICAN_CLIENT_KEY"}))
+            return 0
+        led = SchedulerLedger(ledger_path(base))
+        at = _now_dt() + timedelta(seconds=delay)
+        # A window wider than the delay just means "announce now".
+        arm_restart(led, at, min(window, delay), freq)
+        led.record("restart-armed", "ok", f"restart at {_iso(at)}, warn {min(window, delay)}s before")
+        state = {"restart_at": _iso(at), "warn_at": led.get_state(PENDING_WARN_KEY)}
+        led.close()
+        print(json.dumps({"ok": True, "data": state}))
+        return 0
+    if cmd == "cancel-restart":
+        led = SchedulerLedger(ledger_path(base))
+        ok, detail = cancel_restart(base, led)
+        led.record("restart-cancel", "ok" if ok else "error", detail)
+        led.close()
+        print(json.dumps({"ok": ok, "detail": detail}))
+        return 0
+    print("usage: admin_schedule.py <scan-loop|status|runs|run-backup|run-restart|"
+          "arm-restart <delay> <window> <freq>|cancel-restart|run-task <id>|set-config <json>> [BASE]",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv))

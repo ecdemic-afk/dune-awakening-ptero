@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dune Server Panel</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main id="login" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <h1>Dune server</h1>
+    <label for="password">Panel password</label>
+    <input id="password" type="password" autocomplete="current-password" required autofocus>
+    <button type="submit" class="primary">Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="title">
+      <h1 id="server-name">Dune server</h1>
+      <span id="state" class="badge">…</span>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <button data-group="overview" aria-current="page">Overview</button>
+      <button data-group="players">Players</button>
+      <button data-group="world">World</button>
+      <button data-group="server">Server</button>
+      <button data-group="console">Console</button>
+    </nav>
+    <button id="logout" class="ghost">Sign out</button>
+  </header>
+  <nav id="subnav" class="subnav" aria-label="Pages" hidden></nav>
+
+  <section id="tab-overview" class="tab">
+    <div class="stats">
+      <div class="card stat"><span class="label">Players online</span><span id="players" class="value">–</span></div>
+      <div class="card stat"><span class="label">Joinable</span><span id="joinable" class="value">–</span></div>
+      <div class="card stat"><span class="label">Up for</span><span id="uptime" class="value">–</span></div>
+      <div class="card stat"><span class="label">Version</span><span id="version" class="value">–</span></div>
+    </div>
+
+    <div id="pending" class="card notice" hidden>
+      <span id="pending-text"></span>
+      <button data-cmd="cancel" class="ghost">Cancel</button>
+    </div>
+
+    <div class="card">
+      <h2>Actions</h2>
+      <div class="actions">
+        <label>Countdown when players are on
+          <select id="countdown">
+            <option value="now">none</option>
+            <option value="1m">1 min</option>
+            <option value="5m">5 min</option>
+            <option value="10m" selected>10 min</option>
+            <option value="15m">15 min</option>
+            <option value="30m">30 min</option>
+          </select>
+        </label>
+        <input id="reason" placeholder="Reason players see (optional)" maxlength="80">
+      </div>
+      <div class="actions">
+        <button class="primary" data-timed="restart">Restart</button>
+        <button data-timed="update">Update game</button>
+        <button data-timed="upgrade">Upgrade server software</button>
+        <button data-cmd="backup">Back up now</button>
+        <button id="ov-health">Health check</button>
+      </div>
+      <form id="announce-form" class="actions">
+        <input id="announce" placeholder="Message to everyone in game" maxlength="200" required>
+        <button type="submit">Announce</button>
+      </form>
+      <p id="action-result" class="muted" role="status"></p>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Health</h2>
+        <ul id="checks" class="list"></ul>
+      </div>
+      <div class="card">
+        <h2>Services</h2>
+        <ul id="services" class="list services"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-players" class="tab" hidden>
+    <div class="players">
+      <aside class="card player-list-card">
+        <div class="actions">
+          <input id="player-search" type="search" placeholder="Search by name or Steam id" aria-label="Search players">
+        </div>
+        <div class="console-bar">
+          <label><input type="checkbox" id="online-only"> Online only</label>
+          <span id="player-count" class="muted"></span>
+          <button id="players-refresh" class="ghost small">Refresh</button>
+        </div>
+        <ul id="player-list" class="player-list" aria-label="Players"></ul>
+        <p id="players-error" class="error"></p>
+      </aside>
+
+      <div id="player-empty" class="card muted">Pick a player on the left.</div>
+      <div id="player-detail" class="player-detail" hidden>
+        <div class="card">
+          <div class="player-head">
+            <div>
+              <h2 id="p-name"></h2>
+              <div class="badges"><span id="p-online" class="badge"></span><span id="p-banned" class="badge held" hidden>banned</span></div>
+            </div>
+            <div class="actions">
+              <button data-act="kick">Kick</button>
+              <button data-act="water">Refill water</button>
+              <button id="p-ban" class="danger">Ban…</button>
+              <button id="p-unban" hidden>Lift ban</button>
+            </div>
+          </div>
+          <dl class="facts">
+            <div><dt>Map</dt><dd id="p-map"></dd></div>
+            <div><dt>State</dt><dd id="p-life"></dd></div>
+            <div><dt>Last active</dt><dd id="p-last"></dd></div>
+            <div><dt>Steam id</dt><dd id="p-steam"></dd></div>
+            <div><dt>Player id</dt><dd id="p-fls"></dd></div>
+          </dl>
+          <dl class="facts stats">
+            <div><dt>Level</dt><dd id="p-level"></dd></div>
+            <div><dt>Solaris</dt><dd id="p-solaris"></dd></div>
+            <div><dt>Allegiance</dt><dd id="p-align"></dd></div>
+            <div><dt>Atreides</dt><dd id="p-rep1"></dd></div>
+            <div><dt>Harkonnen</dt><dd id="p-rep2"></dd></div>
+          </dl>
+          <p id="p-result" class="result" role="status"></p>
+        </div>
+
+        <div class="card">
+          <h2>Give items</h2>
+          <div class="actions item-picker">
+            <div class="combo">
+              <input id="give-search" type="search" placeholder="Search 2,500 items…" autocomplete="off" aria-label="Item">
+              <ul id="give-results" class="combo-list" hidden></ul>
+            </div>
+            <input id="give-qty" type="number" min="1" max="10000" value="1" aria-label="Quantity" class="num">
+            <label>Quality <select id="give-quality"><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <button id="give-btn" class="primary" disabled>Give</button>
+          </div>
+          <div class="actions">
+            <select id="kit-select" aria-label="Kit"></select>
+            <button id="kit-give">Give kit</button>
+            <button id="kit-edit" class="ghost">Manage kits…</button>
+          </div>
+          <p class="muted small-text">Online players get items instantly. For offline players, items go straight into their saved inventory.</p>
+        </div>
+
+        <div class="card">
+          <h2>Progression <span class="muted small-text">— the player must be offline</span></h2>
+          <div class="grid-actions">
+            <form data-amount="give-currency"><label>Solaris (+/−)<input type="number" step="1" required></label><button>Apply</button></form>
+            <form data-amount="award-char-xp"><label>Character XP (+/−)<input type="number" step="1" required></label><button>Apply</button></form>
+            <form id="rep-form"><label>Reputation
+              <select id="rep-faction"><option value="atreides">Atreides</option><option value="harkonnen">Harkonnen</option></select>
+              <input id="rep-amount" type="number" step="1" required aria-label="Reputation amount"></label><button>Apply</button></form>
+            <form id="rename-form"><label>Rename<input id="rename" maxlength="32" required></label><button>Rename</button></form>
+          </div>
+          <div class="actions">
+            <button data-act="grant-keystones">Grant all keystones</button>
+            <button data-act="tech-unlock" data-mode="unlock-all">Unlock all recipes</button>
+            <button data-act="tech-unlock" data-mode="lock-all" class="ghost">Re-lock recipes</button>
+          </div>
+          <details class="danger-zone">
+            <summary>Danger zone</summary>
+            <div class="actions">
+              <button class="danger" data-wipe="clean">Wipe inventory…</button>
+              <button class="danger" data-wipe="reset">Reset XP and skills…</button>
+            </div>
+          </details>
+        </div>
+
+        <div class="card">
+          <h2>Inventory</h2>
+          <p id="inv-error" class="muted"></p>
+          <div class="table-wrap">
+            <table class="inv">
+              <thead><tr><th>Item</th><th>Qty</th><th>Quality</th><th>Durability</th><th>Where</th><th></th></tr></thead>
+              <tbody id="inv-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <section id="tab-items" class="tab" hidden>
+    <div class="shop">
+      <div class="card">
+        <div class="actions">
+          <input id="cat-search" type="search" placeholder="Search 2,500 items by name…" aria-label="Search items">
+        </div>
+        <div id="cat-chips" class="chips" role="group" aria-label="Category"></div>
+        <p id="cat-count" class="muted small-text"></p>
+        <div id="cat-grid" class="item-grid"></div>
+        <div class="actions"><button id="cat-more" class="ghost" hidden>Show more</button></div>
+      </div>
+      <aside id="cat-give" class="card give-panel">
+        <p id="cg-empty" class="muted">Pick an item to give it.</p>
+        <div id="cg-body" hidden>
+          <div class="give-head"><img id="cg-img" alt=""><div><h2 id="cg-name"></h2><p id="cg-meta" class="muted small-text"></p></div></div>
+          <label class="stack">To<select id="cg-target" aria-label="Who gets it"></select></label>
+          <div class="actions">
+            <label>Quantity <input id="cg-qty" type="number" min="1" max="10000" value="1" class="num"></label>
+            <label>Quality <select id="cg-quality"><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          </div>
+          <div class="actions"><button id="cg-give" class="primary">Give</button><button id="cg-kit" class="ghost">Add to a kit…</button></div>
+          <p id="cg-result" class="result" role="status"></p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-vehicles" class="tab" hidden>
+    <div class="shop">
+      <div class="card">
+        <p class="muted">Pick a vehicle and a variant. It appears a few metres from the player you choose, who must be online.</p>
+        <div id="veh-grid" class="item-grid vehicles"></div>
+        <p id="veh-error" class="error"></p>
+      </div>
+      <aside class="card give-panel">
+        <p id="vg-empty" class="muted">Pick a vehicle.</p>
+        <div id="vg-body" hidden>
+          <div class="give-head"><img id="vg-img" alt=""><div><h2 id="vg-name"></h2></div></div>
+          <div id="vg-variants" class="chips" role="group" aria-label="Variant"></div>
+          <label class="stack">Next to<select id="vg-player" aria-label="Player"></select></label>
+          <div class="actions"><button id="vg-spawn" class="primary">Spawn vehicle</button></div>
+          <p id="vg-result" class="result" role="status"></p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-kits" class="tab" hidden>
+    <div class="players">
+      <aside class="card player-list-card">
+        <div class="console-bar"><strong>Kits</strong><button id="kd-new" class="ghost small">New kit</button></div>
+        <ul id="kd-list" class="player-list" aria-label="Kits"></ul>
+      </aside>
+      <div class="player-detail">
+        <div class="card">
+          <label class="stack">Kit name<input id="kd-name" maxlength="40"></label>
+          <div class="table-wrap"><table class="inv">
+            <thead><tr><th>Item</th><th>Quantity</th><th></th></tr></thead><tbody id="kd-items"></tbody></table></div>
+          <div class="actions item-picker" style="margin-top:.75rem">
+            <div class="combo">
+              <input id="kd-search" type="search" placeholder="Add an item — search 2,500 items…" autocomplete="off" aria-label="Add item to kit">
+              <ul id="kd-results" class="combo-list" hidden></ul>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="kd-save" class="primary">Save kits</button>
+            <button id="kd-cancel" class="ghost">Discard changes</button>
+            <button id="kd-delete" class="ghost danger">Delete this kit</button>
+          </div>
+          <p id="kd-error" class="result" role="status"></p>
+        </div>
+
+        <div class="card">
+          <h2>Give a kit</h2>
+          <div class="actions">
+            <label>Kit <select id="gift-kit" aria-label="Kit"></select></label>
+            <label>to <select id="gift-target" aria-label="Who gets it"></select></label>
+            <button id="gift-btn" class="primary">Give</button>
+          </div>
+          <p class="muted small-text">Single items are on the Items page.</p>
+          <p id="gift-result" class="result" role="status"></p>
+        </div>
+
+        <div class="card">
+          <h2>Welcome gift</h2>
+          <p class="muted">Every player gets this kit once, the first time they're online after it's turned on (new players
+            as they arrive). Checked every minute.</p>
+          <div class="actions">
+            <label><input type="checkbox" id="wel-on"> Give new players</label>
+            <select id="wel-kit" aria-label="Welcome kit"></select>
+          </div>
+          <div class="actions">
+            <label><input type="checkbox" id="wel-announce"> Announce it to the server</label>
+            <input id="wel-text" maxlength="200" placeholder="{name} just landed on Arrakis — welcome!" aria-label="Announcement">
+          </div>
+          <div class="actions">
+            <button id="wel-save" class="primary">Save welcome gift</button>
+            <button id="wel-regrant" class="ghost">Give it to everyone again…</button>
+          </div>
+          <p id="wel-result" class="result" role="status"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-map" class="tab" hidden>
+    <div class="card">
+      <div class="actions">
+        <div id="map-buttons" class="segmented" role="group" aria-label="Map"></div>
+        <label><input type="checkbox" id="map-offline"> Show offline players</label>
+        <span id="map-count" class="muted"></span>
+      </div>
+      <div class="actions">
+        <label id="map-res-toggle"><input type="checkbox" id="map-res" checked> Show resources</label>
+        <span id="map-legend" class="legend"></span>
+      </div>
+      <p id="map-note" class="muted small-text"></p>
+      <p class="muted small-text">Click anywhere on the map to teleport a player there. Dots are each player's last saved
+        position, which can lag a few seconds behind.</p>
+      <div id="map-tp" class="actions tp-bar" hidden>
+        <span id="map-tp-where"></span>
+        <select id="map-tp-player" aria-label="Player to teleport"></select>
+        <button id="map-tp-go" class="primary">Teleport here</button>
+        <button id="map-save-spot" class="ghost">Save this spot…</button>
+        <button id="map-tp-cancel" class="ghost">Cancel</button>
+      </div>
+      <p id="map-tp-result" class="result" role="status"></p>
+      <div class="map-wrap">
+        <div id="map-stage" class="map-stage">
+          <img id="map-img" alt="">
+          <div id="map-grid" aria-hidden="true"></div>
+          <div id="map-pois"></div>
+          <div id="map-dots"></div>
+          <div id="map-pick" class="map-pick" hidden></div>
+        </div>
+      </div>
+      <p id="map-error" class="error"></p>
+      <ul id="map-list" class="list map-list"></ul>
+    </div>
+    <div class="card">
+      <h2>Saved locations on this map</h2>
+      <ul id="loc-list" class="list loc-list"></ul>
+      <form id="loc-from-player" class="actions">
+        <span class="muted">Save where</span>
+        <select id="loc-player" aria-label="Player"></select>
+        <span class="muted">is standing as</span>
+        <input id="loc-name" maxlength="60" placeholder="Name, e.g. Trading post" required aria-label="Location name">
+        <button>Save</button>
+      </form>
+      <p id="loc-result" class="result" role="status"></p>
+    </div>
+  </section>
+
+  <section id="tab-bases" class="tab" hidden>
+    <div class="players">
+      <aside class="card player-list-card">
+        <input id="base-search" type="search" placeholder="Search by owner or map" aria-label="Search bases">
+        <div class="console-bar"><span id="base-count" class="muted"></span>
+          <button id="bases-refresh" class="ghost small">Refresh</button></div>
+        <ul id="base-list" class="player-list"></ul>
+        <p id="bases-error" class="error"></p>
+      </aside>
+      <div id="base-empty" class="card muted">Pick a base on the left.</div>
+      <div id="base-detail" class="player-detail" hidden>
+        <div class="card">
+          <div class="player-head">
+            <div><h2 id="b-title"></h2><div id="b-sub" class="muted"></div></div>
+            <div class="actions">
+              <button class="primary" data-refill="water">Refill water</button>
+              <button data-refill="fuel">Refill fuel</button>
+            </div>
+          </div>
+          <p class="muted small-text">The game keeps a running map's bases in memory, so a refill is applied right away only when
+            that map is stopped. Otherwise it is queued and applied at the next restart, before the map loads.</p>
+          <p id="b-result" class="result" role="status"></p>
+        </div>
+        <div class="card"><h2>Water storage</h2><div class="table-wrap"><table class="inv"><tbody id="b-water"></tbody></table></div></div>
+        <div class="card"><h2>Generators</h2><div class="table-wrap"><table class="inv"><tbody id="b-fuel"></tbody></table></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-guilds" class="tab" hidden>
+    <div class="players">
+      <aside class="card player-list-card">
+        <input id="guild-search" type="search" placeholder="Search guilds" aria-label="Search guilds">
+        <div class="console-bar"><span id="guild-count" class="muted"></span>
+          <button id="guild-new" class="ghost small">New guild…</button></div>
+        <ul id="guild-list" class="player-list"></ul>
+        <p id="guilds-error" class="error"></p>
+      </aside>
+      <div id="guild-empty" class="card muted">Pick a guild on the left.</div>
+      <div id="guild-detail" class="player-detail" hidden>
+        <div class="card">
+          <div class="player-head">
+            <div><h2 id="g-name"></h2><div id="g-sub" class="muted"></div></div>
+            <div class="actions">
+              <button id="g-rename">Rename…</button>
+              <button id="g-disband" class="danger">Disband…</button>
+            </div>
+          </div>
+          <form id="g-desc-form" class="actions">
+            <input id="g-desc" maxlength="500" placeholder="Description" aria-label="Description">
+            <button>Save description</button>
+          </form>
+          <p id="g-result" class="result" role="status"></p>
+        </div>
+        <div class="card"><h2>Members</h2><div class="table-wrap"><table class="inv">
+          <thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody id="g-members"></tbody></table></div></div>
+        <div class="card"><h2>Pending invites</h2><ul id="g-invites" class="list"></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-schedule" class="tab" hidden>
+    <div class="card">
+      <h2>Automatic restarts</h2>
+      <p class="muted">Server time now: <strong id="s-now"></strong>. Players online get the countdown; with nobody online the restart happens at once. No days ticked = every day.</p>
+      <div id="s-restarts" class="sched-rows"></div>
+      <div class="actions"><button id="s-add-restart" class="ghost">Add a restart time</button></div>
+    </div>
+    <div class="card">
+      <h2>Automatic backups</h2>
+      <div class="actions">
+        <label>Back up the database every
+          <select id="s-backup">
+            <option value="0">never (off)</option><option value="1">hour</option><option value="2">2 hours</option>
+            <option value="3">3 hours</option><option value="6">6 hours</option><option value="12">12 hours</option>
+            <option value="24">day</option>
+          </select></label>
+      </div>
+      <p class="muted small-text">Backups go to backups/; the oldest beyond <code>[backups] keep</code> in the config are removed.</p>
+    </div>
+    <div class="card">
+      <h2>Announcements</h2>
+      <div id="s-announce" class="sched-rows"></div>
+      <div class="actions"><button id="s-add-announce" class="ghost">Add an announcement</button></div>
+    </div>
+    <div class="actions"><button id="s-save" class="primary">Save schedule</button><span id="s-result" class="muted"></span></div>
+  </section>
+
+  <section id="tab-commands" class="tab" hidden>
+    <div class="card">
+      <h2>Server information</h2>
+      <div id="info-buttons" class="segmented" role="group" aria-label="Server information">
+        <button type="button" data-info="status">Status</button>
+        <button type="button" data-info="health">Health check</button>
+        <button type="button" data-info="ports">Ports</button>
+        <button type="button" data-info="config">Check config</button>
+        <button type="button" data-info="players">Players</button>
+      </div>
+      <div id="info-out" class="info-out" role="status"></div>
+      <div class="actions">
+        <button type="button" id="srv-backup">Back up now</button>
+        <button type="button" id="srv-cancel" class="ghost">Cancel pending restart</button>
+      </div>
+      <p id="srv-result" class="result" role="status"></p>
+      <p class="muted small-text">Restart, update and announcements are on the Overview page.</p>
+    </div>
+    <div class="card">
+      <h2>Game operations</h2>
+      <div class="actions">
+        <input id="op-filter" type="search" placeholder="Filter operations…" aria-label="Filter operations">
+      </div>
+      <div class="ops">
+        <ul id="op-list" class="op-list"></ul>
+        <form id="op-form" class="op-form" hidden>
+          <h3 id="op-name"></h3>
+          <p id="op-desc" class="muted"></p>
+          <div id="op-fields" class="op-fields"></div>
+          <div class="actions"><button class="primary" id="op-run">Run</button></div>
+          <pre id="op-out" class="log op-out" hidden></pre>
+        </form>
+      </div>
+      <datalist id="player-options"></datalist>
+    </div>
+  </section>
+
+  <section id="tab-console" class="tab" hidden>
+    <div class="card console-card">
+      <div class="console-bar">
+        <label><input type="checkbox" id="only-problems"> Warnings and errors only</label>
+        <label title="Off: services only report warnings and errors to the console"><input type="checkbox" id="verbose"> Every service's full output</label>
+        <label><input type="checkbox" id="follow" checked> Follow</label>
+      </div>
+      <pre id="log" class="log" aria-live="off"></pre>
+      <form id="command-form" class="command">
+        <input id="command" placeholder="Console command — type help" autocomplete="off" spellcheck="false">
+        <button type="submit" class="primary">Run</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="tab-config" class="tab" hidden>
+    <div class="settings">
+      <nav id="set-nav" class="card set-nav" aria-label="Settings sections"></nav>
+      <div class="set-main">
+        <div id="set-forms"></div>
+        <div id="set-file" class="card" hidden>
+          <h2>config/dune.toml</h2>
+          <p class="muted">The same settings as plain text, with every option explained. Saving checks it first; nothing
+            is saved if it has a mistake. Changes apply at the next restart.</p>
+          <textarea id="config" spellcheck="false" aria-label="config/dune.toml"></textarea>
+          <div class="actions">
+            <button id="config-save" class="primary">Save</button>
+            <button id="config-save-restart">Save and restart</button>
+            <button id="config-reload" class="ghost">Discard changes</button>
+          </div>
+          <ul id="config-problems" class="problems" role="alert"></ul>
+        </div>
+      </div>
+    </div>
+    <div id="set-bar" class="savebar" hidden>
+      <span id="set-count"></span>
+      <ul id="set-problems" class="problems" role="alert"></ul>
+      <div class="actions">
+        <button id="set-discard" class="ghost">Discard</button>
+        <button id="set-save">Save</button>
+        <button id="set-save-restart" class="primary">Save and restart</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-backups" class="tab" hidden>
+    <div class="card">
+      <h2>Database backups</h2>
+      <p class="muted">Restoring saves the current world as a new backup first, then restarts the server.</p>
+      <div class="actions"><button data-cmd="backup" class="primary">Back up now</button></div>
+      <ul id="backups" class="list backups"></ul>
+    </div>
+  </section>
+</div>
+<script src="app.js"></script>
+<script src="players.js"></script>
+<script src="world.js"></script>
+<script src="shop.js"></script>
+<script src="settings.js"></script>
+</body>
+</html>

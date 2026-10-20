@@ -1,0 +1,42 @@
+# Builds the server's runtime image (docker/Dockerfile) and publishes it as
+# ghcr.io/ecdemic-afk/dune-awakening-ptero — the image the egg uses.
+# Runs when the Dockerfile changes, weekly (to pick up Debian security fixes),
+# or by hand from the Actions tab.
+name: Runtime image
+
+on:
+  push:
+    branches: [main]
+    paths: ["docker/**", ".github/workflows/image.yml"]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker
+          platforms: linux/amd64
+          pull: true
+          push: true
+          # A plain single-platform image: no build-record index, which some older
+          # Docker Engines on Wings nodes fail to pull.
+          provenance: false
+          sbom: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/dune-awakening-ptero:latest
+            ghcr.io/${{ github.repository_owner }}/dune-awakening-ptero:${{ github.sha }}

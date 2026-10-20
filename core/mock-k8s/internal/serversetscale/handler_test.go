@@ -1,0 +1,259 @@
+package serversetscale
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+)
+
+// withEnv routes the handler's env reads through a fake for one test.
+func withEnv(t *testing.T, enable bool, omit string) {
+	t.Helper()
+	old := osLookupEnv
+	osLookupEnv = func(name string) string {
+		switch name {
+		case "MOCK_K8S_LIST_ENABLE":
+			// "" is the real default (unset) and now means ENABLED; an
+			// operator disabling the list writes an explicit 0.
+			if !enable {
+				return "0"
+			}
+		case "MOCK_K8S_LIST_OMIT":
+			return omit
+		}
+		return ""
+	}
+	t.Cleanup(func() { osLookupEnv = old })
+}
+
+func seedBare(t *testing.T, s *Store, name, mapName string) {
+	t.Helper()
+	if _, ok := s.Create(Object{
+		Metadata: Metadata{Namespace: "default", Name: name},
+		Spec:     map[string]any{"mapName": mapName, "battlegroupName": "w", "replicas": int64(1)},
+	}); !ok {
+		t.Fatalf("seed %s failed", name)
+	}
+}
+
+func seedWithLabels(t *testing.T, s *Store, name, mapName string) {
+	t.Helper()
+	if _, ok := s.Create(Object{
+		Metadata: Metadata{Namespace: "default", Name: name, Labels: map[string]string{"existing": "x"}},
+		Spec:     map[string]any{"mapName": mapName, "battlegroupName": "w", "replicas": int64(1)},
+	}); !ok {
+		t.Fatalf("seed %s failed", name)
+	}
+}
+
+func listItems(t *testing.T, s *Store) []any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/apis/igw.funcom.com/v1/namespaces/default/serversetscales", nil)
+	rec := httptest.NewRecorder()
+	Handler(s)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("LIST status = %d, want 200", rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode LIST: %v\nbody: %s", err, rec.Body.String())
+	}
+	items, _ := out["items"].([]any)
+	return items
+}
+
+// Until 2026-09-20 this asserted the opposite: LIST was empty by default,
+// because a populated one crashed the Director. The cause turned out to be the
+// map-name key being set as a label when the Director reads it as an
+// annotation (see ensureUniformItem), and an empty LIST was never free — it is
+// why the Director could not find an instance to travel a player to.
+func TestList_PopulatedByDefault(t *testing.T) {
+	osLookupEnv = func(string) string { return "" } // nothing set: the real default
+	t.Cleanup(func() { osLookupEnv = func(name string) string { return os.Getenv(name) } })
+	s := NewStore()
+	seedBare(t, s, "sietch-survival", "Survival_1")
+	items := listItems(t, s)
+	if len(items) != 1 {
+		t.Fatalf("default LIST should carry real items, got %d", len(items))
+	}
+	it := items[0].(map[string]any)
+	md := it["metadata"].(map[string]any)
+	ann, _ := md["annotations"].(map[string]any)
+	if ann == nil || ann["igw.funcom.com/map-name"] != "Survival_1" {
+		t.Fatalf("default LIST item lacks the annotation the Director keys on: %v", md)
+	}
+}
+
+// The escape hatch stays: a future build that throws again can be taken back
+// to the old behaviour without shipping a new binary.
+func TestList_EmptyWhenExplicitlyDisabled(t *testing.T) {
+	withEnv(t, false, "")
+	s := NewStore()
+	seedBare(t, s, "sietch-survival", "Survival_1")
+	if items := listItems(t, s); len(items) != 0 {
+		t.Fatalf("MOCK_K8S_LIST_ENABLE=0 should empty the LIST, got %d", len(items))
+	}
+}
+
+func TestList_EnabledShapesItemsUniformly(t *testing.T) {
+	withEnv(t, true, "")
+	s := NewStore()
+	seedBare(t, s, "sietch-survival", "Survival_1") // no labels on the seed
+
+	items := listItems(t, s)
+	if len(items) != 1 {
+		t.Fatalf("enabled LIST items = %d, want 1", len(items))
+	}
+	it := items[0].(map[string]any)
+
+	md, ok := it["metadata"].(map[string]any)
+	if !ok {
+		t.Fatal("item has no metadata")
+	}
+	labels, ok := md["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("LIST item missing labels — uniform shaping not applied")
+	}
+	if labels["igw.funcom.com/map-name"] != "Survival_1" {
+		t.Errorf("map-name label = %v, want Survival_1", labels["igw.funcom.com/map-name"])
+	}
+	if labels["igw.funcom.com/battlegroup-name"] != "w" {
+		t.Errorf("battlegroup-name label = %v, want w", labels["igw.funcom.com/battlegroup-name"])
+	}
+	if _, ok := it["status"].(map[string]any); !ok {
+		t.Error("LIST item missing status")
+	}
+	if _, ok := it["spec"].(map[string]any); !ok {
+		t.Error("LIST item missing spec")
+	}
+}
+
+func TestList_OmitTopLevelField(t *testing.T) {
+	withEnv(t, true, "status")
+	s := NewStore()
+	seedBare(t, s, "sietch-survival", "Survival_1")
+
+	it := listItems(t, s)[0].(map[string]any)
+	if _, present := it["status"]; present {
+		t.Errorf("MOCK_K8S_LIST_OMIT=status did not drop status: %v", it)
+	}
+}
+
+func TestList_OmitNestedField(t *testing.T) {
+	withEnv(t, true, "metadata.labels")
+	s := NewStore()
+	seedWithLabels(t, s, "sietch-survival", "Survival_1")
+
+	it := listItems(t, s)[0].(map[string]any)
+	md := it["metadata"].(map[string]any)
+	if _, present := md["labels"]; present {
+		t.Errorf("MOCK_K8S_LIST_OMIT=metadata.labels did not drop labels: %v", md)
+	}
+}
+
+func TestList_OmitDeeplyNestedField(t *testing.T) {
+	// A multi-level path (more than one dot) must descend one map level per
+	// dot and drop the leaf key, not silently no-op. The bisection knob is
+	// useless if it can only reach one level deep.
+	withEnv(t, true, "metadata.labels.existing")
+	s := NewStore()
+	seedWithLabels(t, s, "sietch-survival", "Survival_1") // seeds label existing=x
+
+	it := listItems(t, s)[0].(map[string]any)
+	md := it["metadata"].(map[string]any)
+	labels, ok := md["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("labels map was removed; only the leaf key should be dropped")
+	}
+	if _, present := labels["existing"]; present {
+		t.Errorf("MOCK_K8S_LIST_OMIT=metadata.labels.existing did not drop the nested key: %v", labels)
+	}
+	// Sibling derived label must survive — only the targeted leaf is dropped.
+	if _, present := labels["igw.funcom.com/map-name"]; !present {
+		t.Errorf("deep omit removed a sibling label: %v", labels)
+	}
+}
+
+func TestList_DoesNotMutateStoredObject(t *testing.T) {
+	withEnv(t, true, "")
+	s := NewStore()
+	seedWithLabels(t, s, "sietch-survival", "Survival_1")
+
+	_ = listItems(t, s) // ensureUniformItem must clone, not mutate, the store
+
+	obj, ok := s.Get("default", "sietch-survival")
+	if !ok {
+		t.Fatal("stored object vanished")
+	}
+	if _, leaked := obj.Metadata.Labels["igw.funcom.com/map-name"]; leaked {
+		t.Errorf("LIST leaked a derived label into the stored object: %v", obj.Metadata.Labels)
+	}
+	if len(obj.Metadata.Labels) != 1 {
+		t.Errorf("stored object labels mutated: %v", obj.Metadata.Labels)
+	}
+}
+
+func seedWithStatus(t *testing.T, s *Store, name, mapName string, status map[string]any) {
+	t.Helper()
+	if _, ok := s.Create(Object{
+		Metadata: Metadata{Namespace: "default", Name: name, Labels: map[string]string{"existing": "x"}},
+		Spec:     map[string]any{"mapName": mapName, "battlegroupName": "w", "replicas": int64(1)},
+		Status:   status,
+	}); !ok {
+		t.Fatalf("seed %s failed", name)
+	}
+}
+
+// ensureUniformItem must not add derived keys to the stored object's Spec.
+func TestList_DoesNotMutateStoredSpec(t *testing.T) {
+	withEnv(t, true, "")
+	s := NewStore()
+	seedWithLabels(t, s, "sietch-survival", "Survival_1")
+
+	_ = listItems(t, s)
+
+	obj, ok := s.Get("default", "sietch-survival")
+	if !ok {
+		t.Fatal("stored object vanished")
+	}
+	for _, k := range []string{"mapName", "battlegroupName", "replicas"} {
+		if _, ok := obj.Spec[k]; !ok {
+			t.Errorf("LIST dropped spec key %q from the stored object", k)
+		}
+	}
+	if len(obj.Spec) != 3 {
+		t.Errorf("stored spec mutated after LIST, got %d keys: %v", len(obj.Spec), obj.Spec)
+	}
+}
+
+// The stored object's non-nil Status shares its backing map with the value
+// ensureUniformItem returns; objectToMap's JSON round-trip is what isolates
+// the LIST copy before applyOmit can delete from it. This pins that down: a
+// LIST that omits status must not wipe the stored Status.
+func TestList_DoesNotMutateStoredStatus(t *testing.T) {
+	withEnv(t, true, "status") // applyOmit will delete status from the LIST copy
+	s := NewStore()
+	seedWithStatus(t, s, "sietch-survival", "Survival_1", map[string]any{
+		"observedGeneration": int64(3),
+		"completedReplicas":  int64(2),
+		"phase":              "Running",
+	})
+
+	_ = listItems(t, s)
+
+	obj, ok := s.Get("default", "sietch-survival")
+	if !ok {
+		t.Fatal("stored object vanished")
+	}
+	if obj.Status == nil {
+		t.Fatal("LIST wiped the stored Status")
+	}
+	if obj.Status["phase"] != "Running" {
+		t.Errorf("stored Status.phase = %v, want Running — LIST mutated stored status", obj.Status["phase"])
+	}
+	if len(obj.Status) != 3 {
+		t.Errorf("stored Status has %d keys after LIST, want 3: %v", len(obj.Status), obj.Status)
+	}
+}
