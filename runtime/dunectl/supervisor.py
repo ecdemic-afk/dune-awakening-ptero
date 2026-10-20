@@ -28,9 +28,10 @@ from . import __version__
 from . import config as configmod
 from . import configform
 from . import console, dims, doctor, gameplay, ports, upgrade
-from .discord import Notifier
+from .discord import LiveStatus, Notifier, instance_name, status_embed
 from .logstream import Follower
 from .panel import Panel
+from . import players as players_mod
 from .players import PlayerTools
 from .world import WorldTools
 from .images import ItemImages
@@ -87,6 +88,8 @@ class Supervisor:
         self.svc = Services(base, self.env, self._svc_say)
         self.discord = Notifier(self.sv["discord_webhook"], self.sv["server_name"],
                                 self.cfg["discord"], say)
+        self.live = LiveStatus(self.sv["discord_webhook"], os.path.join(base, "server", "state", "discord-status.json"),
+                               self.sv["server_name"], say)
         self.follower: Follower | None = None
         if self.scripts not in sys.path:
             sys.path.insert(0, self.scripts)  # core helpers (admin_ban, admin_progression, ...)
@@ -247,6 +250,7 @@ class Supervisor:
                                  lambda t, m, lv: None if self.svc.stopping else say(m, lv, t))
         self.follower.start()
         self._start_panel()
+        threading.Thread(target=self._live_loop, daemon=True, name="live-status").start()
         self._boot_until_up()
         last_rotate = 0.0
         while not self.stop_evt.wait(TICK):
@@ -589,6 +593,8 @@ class Supervisor:
         self.cancel_evt.set()
         self.state = "stopping"
         say("Stopping — game servers save first, then the database.")
+        if self.cfg["discord"].get("live_status"):
+            self.live.update(self._status_embed("offline"), timeout=5)  # the loop is gone once we stop
         self.svc.stop_all()
         self.discord.send("stop", "Server stopped", "", "info")
         time.sleep(0.5)
@@ -730,6 +736,48 @@ class Supervisor:
             f"backups {'every ' + str(saved['backup_every_hours']) + ' h' if saved['backup_every_hours'] else 'off'}, "
             f"{len(saved['announcements'])} announcement(s)")
         return self.schedule_view()
+
+    # ------------------------------------------------------------ Discord live status
+    def instances(self) -> list[dict]:
+        """Every running map instance and its players (farm_state, joined to the partition it serves)."""
+        sql = ("SELECT fs.map, COALESCE(wp.dimension_index, 0) AS dim, COALESCE(wp.label, '') AS label, "
+               "COALESCE(fs.connected_players, 0) AS players, fs.ready FROM dune.farm_state fs "
+               "LEFT JOIN dune.world_partition wp ON wp.server_id = fs.server_id "
+               "WHERE fs.alive ORDER BY fs.map = 'Survival_1' DESC, fs.map, dim")
+        rc, out, _ = self.run_op(["db-sql", sql], 20)
+        rows = []
+        for r in (players_mod.parse_csv(out) if rc == 0 else []):
+            try:
+                dim, n = int(r.get("dim") or 0), int(r.get("players") or 0)
+            except ValueError:
+                continue
+            rows.append({"name": instance_name(r.get("map", ""), dim, r.get("label", "")), "players": n,
+                         "ready": str(r.get("ready", "")).lower() in ("t", "true")})
+        return rows
+
+    def _status_embed(self, state: str = "") -> dict:
+        state = state or self.state
+        pending = None
+        if self.pending:
+            kind, at, reason = self.pending
+            pending = {"kind": kind, "in": max(0, int(at - time.time())), "reason": reason}
+        return status_embed(self.sv["server_name"], state, self.instances() if state == "running" else [],
+                            joinable=bool(getattr(self, "joinable", False)), pending=pending,
+                            uptime=int(time.time() - self.started_at) if state == "running" else 0)
+
+    def _live_loop(self) -> None:
+        """Edit the status message every minute, and at once when the state changes."""
+        last, last_at = None, 0.0
+        while not self.stop_evt.wait(5):
+            if not (self.cfg["discord"].get("live_status") and self.live.url):
+                continue
+            sig = (self.state, bool(getattr(self, "joinable", False)), self.pending[0] if self.pending else None)
+            if sig != last or time.time() - last_at >= 60:
+                last, last_at = sig, time.time()
+                try:
+                    self.live.update(self._status_embed())
+                except Exception:  # never let Discord trouble reach the server
+                    pass
 
     def _scheduled_backup(self) -> None:
         try:

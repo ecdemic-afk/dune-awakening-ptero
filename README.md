@@ -21,7 +21,9 @@ Built to be easy to run:
   a restart cannot fix stops and waits for you instead of looping.
 - **Backups you can restore**: `backup` dumps the database safely while running;
   `restore <file> confirm` puts it back (the current world is saved first).
-- **Discord alerts**: online, crashes, restarts, updates, backups, health.
+- **Discord**: one live status message, edited every minute — online / offline,
+  players on each map instance, upcoming restarts — plus alerts for crashes,
+  updates, backups and health.
 - **Web panel**: status, players online, health, restart/update/backup buttons,
   live console, config editor that refuses mistakes, one-click restore.
 

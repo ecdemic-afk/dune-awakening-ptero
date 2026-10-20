@@ -938,3 +938,56 @@ class ConfigFormTests(unittest.TestCase):
         self.assertEqual(config.parse_text(new, SCRIPTS)[0]["instances"]["always_warm"], ["Survival_1"])
         self.assertEqual(config.parse_text(new, SCRIPTS)[0]["backups"]["keep"], 3)
         self.assertIn("max_concurrent = 8", new)
+
+
+class LiveStatusTests(unittest.TestCase):
+    def test_embed_and_names(self):
+        self.assertEqual(discord.instance_name("Survival_1", 0, ""), "Hagga Basin")
+        self.assertEqual(discord.instance_name("DeepDesert_1", 1, "Deep Desert D1"), "Deep Desert D1")
+        self.assertEqual(discord.instance_name("CB_Dungeon_TheFacility", 0, ""), "TheFacility")
+        e = discord.status_embed("Corvinus", "running", [{"name": "Hagga Basin", "players": 3, "ready": True},
+                                                          {"name": "Deep Desert D1", "players": 1, "ready": True},
+                                                          {"name": "Overland", "players": 0, "ready": False}],
+                                 pending={"kind": "restart", "in": 600, "reason": "Nightly"}, uptime=3700)
+        self.assertIn("4 players online", e["description"])
+        self.assertIn("Restart in 10m — Nightly", e["description"])
+        self.assertEqual([f["value"] for f in e["fields"]], ["3 players", "1 player", "starting…"])
+        self.assertIn("Up 1h 01m", e["footer"]["text"])
+        off = discord.status_embed("Corvinus", "offline", [])
+        self.assertIn("Offline", off["title"])
+        self.assertEqual(off["fields"], [])
+
+    def test_posts_once_then_edits_and_reposts_if_deleted(self):
+        import io
+        import urllib.error
+        calls, state = [], {"deleted": False}
+
+        class Res(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def opener(req, timeout=10):
+            calls.append((req.get_method(), req.full_url))
+            if req.get_method() == "PATCH" and state["deleted"]:
+                raise urllib.error.HTTPError(req.full_url, 404, "gone", {}, io.BytesIO(b"{}"))
+            return Res(json.dumps({"id": f"m{len(calls)}"}).encode())
+        path = os.path.join(tempfile.mkdtemp(), "status.json")
+        live = discord.LiveStatus("https://discord.com/api/webhooks/1/abc/", path, "Corvinus", lambda *a: None, opener)
+        embed = discord.status_embed("Corvinus", "starting", [])
+        self.assertTrue(live.update(embed))
+        self.assertEqual(calls[-1], ("POST", "https://discord.com/api/webhooks/1/abc?wait=true"))
+        live.update(embed)
+        self.assertEqual(calls[-1], ("PATCH", "https://discord.com/api/webhooks/1/abc/messages/m1"))
+        state["deleted"] = True
+        live.update(embed)
+        self.assertEqual([m for m, _ in calls[-2:]], ["PATCH", "POST"])  # deleted -> a new message
+
+    def test_live_status_mutes_start_stop_messages(self):
+        n = discord.Notifier("https://discord.com/api/webhooks/1/abc", "S",
+                             {"live_status": True, "notify_start": True, "notify_crash": True}, lambda *a: None,
+                             opener=lambda *a, **k: None)
+        self.assertFalse(n.send("start", "Server online"))
+        self.assertTrue(n.send("crash", "Server problem"))

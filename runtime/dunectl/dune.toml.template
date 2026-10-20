@@ -93,7 +93,13 @@ check_on_start = true
 keep = 7
 
 [discord]
-# The webhook URL is on the Startup tab. Which events to post:
+# The webhook URL is on the Startup tab.
+
+# One message in the channel kept up to date every minute: online / offline,
+# players on each map, upcoming restarts. It replaces the separate start,
+# stop and restart messages.
+live_status = true
+# Which events to post as separate messages:
 notify_start = true
 notify_crash = true
 notify_updates = true

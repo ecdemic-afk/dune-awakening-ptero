@@ -32,6 +32,9 @@ LABELS = {
     "check_on_start": "Check for game updates at start", "keep": "Backups to keep",
     "director_log_level": "Director log level", "game_down_grace": "Game servers down grace (s)",
     "core_down_grace": "Core service down grace (s)", "max_auto_restarts": "Automatic restarts per 30 min",
+    "live_status": "Live status message", "notify_start": "Online / stopped / restart messages",
+    "notify_crash": "Crash alerts", "notify_updates": "Update messages", "notify_backups": "Backup messages",
+    "notify_health": "Health warnings", "notify_players": "Player join / leave messages",
 }
 CHOICES = {("advanced", "director_log_level"): list(config.DIRECTOR_LEVELS)}
 STARTUP_VAR = {v: k for k, v in config.STARTUP_INSTANCES.items()}
