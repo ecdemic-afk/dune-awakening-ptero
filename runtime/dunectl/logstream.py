@@ -43,6 +43,12 @@ HARMLESS = re.compile(r"Ggwp config not available|GGWP is not configured|environ
                       r"|Battlegroups_DeclarePopulationAndActivity|UnobservedTask exception!"
                       r"|LogResourceFieldSubsystem: Error: Couldn't find any fields"
                       r"|The WebRootPath was not found"
+                      # Funcom content noise at map load and player login
+                      r"|LogJson: Error: Json Value of type 'Null' used as a 'Object'"
+                      r"|LogColdness: Error: .* not set!|LogCourier: Error: Failed to find valid PlayerController"
+                      r"|GetMagnitude called for Data|Failed to remove last issued grant"
+                      # the access-list reply is answered locally (fls-stub) and the game treats it as allowed
+                      r"|Failed to parse PlayerAuthorizationsByResourceId"
                       r"|HttpsRedirectionMiddleware|determine the https port for redirect"
                       # Director housekeeping, and travel retries for map copies that are cold or still loading
                       r"|LOH compaction needed|Slow operation:|Failed to process travel queue for partition")
