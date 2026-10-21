@@ -343,3 +343,12 @@ td.with-icon .icon { margin-right: .45rem; }
   .set-row { grid-template-columns: minmax(0, 1fr); }
   .set-ctl { justify-content: flex-start; }
 }
+
+/* instances */
+.ram { display: flex; align-items: center; gap: .75rem; margin: .5rem 0 .25rem; flex-wrap: wrap; }
+.ram-bar { flex: 1 1 240px; height: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
+.ram-bar span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .3s; }
+.ram-bar span.warn { background: var(--warn); }
+.ram-bar span.bad { background: var(--bad); }
+table.inst tr.dim td { color: var(--muted); }
+table.inst .tag { display: inline-block; margin-left: .4rem; padding: 0 .4rem; border: 1px solid var(--border); border-radius: 99px; font-size: .72rem; color: var(--muted); }

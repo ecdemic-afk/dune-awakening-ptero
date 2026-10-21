@@ -212,6 +212,8 @@ class _Handler(BaseHTTPRequestHandler):
                     if not img:
                         return self._send(404, b"", "image/png", {"Cache-Control": "private, max-age=3600"})
                     return self._send(200, img[0], img[1], {"Cache-Control": "private, max-age=604800"})
+                if path == "/api/instances":
+                    return self._json(200, app.instances_view())
                 if path == "/api/vehicles":
                     return self._json(200, {"vehicles": app.world.vehicles()})
                 if path == "/api/locations":
@@ -312,6 +314,12 @@ class _Handler(BaseHTTPRequestHandler):
                     if action == "goto":
                         return self._json(200, app.world.teleport_to(unquote(fls), str(body.get("location", "")), ip))
                     return self._json(200, tools.act(unquote(fls), action, body, ip))
+                if path == "/api/instances":
+                    part = body.get("partition")
+                    if not isinstance(part, int) or isinstance(part, bool):
+                        raise ValueError("partition must be a number")
+                    return self._json(200, app.instance_ctl.act(part, str(body.get("action", "")),
+                                                               body.get("force") is True, ip))
                 if path == "/api/vehicles/spawn":
                     return self._json(200, app.world.spawn_vehicle(str(body.get("player", "")), str(body.get("vehicle", "")),
                                                                    str(body.get("variant", "")), ip))

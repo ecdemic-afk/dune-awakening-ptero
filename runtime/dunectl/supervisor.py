@@ -35,6 +35,7 @@ from . import players as players_mod
 from .players import PlayerTools
 from .world import WorldTools
 from .images import ItemImages
+from .instances import InstanceControl
 from . import schedule as schedmod
 from .services import CRITICAL, EX_CONFIG, OPTIONAL, START_SCRIPTS, WHY, Services
 
@@ -96,6 +97,7 @@ class Supervisor:
         self.players = PlayerTools(base, self.run_op, say)
         self.world = WorldTools(base, self.scripts, self.run_op, say)
         self.images = ItemImages(base, self.players.category_of)
+        self.instance_ctl = InstanceControl(base, self.scripts, self.run_op, say)
         self._fired: set = set()
         self._sched_last = 0.0
         self._backup_running = False
@@ -878,6 +880,11 @@ class Supervisor:
             self.follower.verbose = on
         say("console shows all service output" if on else "console shows warnings and errors only")
         return {"verbose": on}
+
+    def instances_view(self) -> dict:
+        view = self.instance_ctl.state()
+        view["memory"] = doctor.memory_limit()  # the machine's (or container's) RAM, for the usage bar
+        return view
 
     def config_form(self) -> dict:
         return configform.describe(self.config_text(), self.scripts, os.environ)

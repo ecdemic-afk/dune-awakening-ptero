@@ -139,7 +139,7 @@ address at start (with the default block, `27000` → `27032`).
   Solaris / XP / reputation, rename, unlock keystones or recipes, and edit or
   delete inventory items. Changes the game only allows offline say so.
 The panel has five sections: **Overview**, **Players** (Players · Items · Vehicles · Kits & gifts),
-**World** (Map · Bases · Guilds), **Server** (Settings · Schedule · Backups ·
+**World** (Map · Instances · Bases · Guilds), **Server** (Settings · Schedule · Backups ·
 Commands) and **Console**.
 
 - **Settings**: every option of `config/dune.toml` as switches, number fields and
@@ -167,6 +167,12 @@ Commands) and **Console**.
   stravidium, taxis — from the 12 known layouts. **Saved locations**: save a
   clicked spot or where a player stands, then send any player on that map there.
   Refreshes every 10 s.
+- **Instances**: every running map and map copy with its players, RAM and uptime,
+  and a total against the machine's memory. Stop any instance (a second
+  confirmation if players are on it) or start a stopped one. A stopped copy stays
+  stopped across restarts until started again; stopped dungeons and hubs start by
+  themselves when a player travels there. The main Hagga Basin sietch stops only
+  with the server.
 - **Bases**: every base with its owner and map; water storage and generator fuel
   levels; refill water or fuel. A running map keeps its bases in memory, so the
   refill is queued and applied at the next restart before the map loads.

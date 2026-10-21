@@ -536,3 +536,58 @@ $("verbose").addEventListener("change", async () => {
 });
 WORLD.console = async () => { try { $("verbose").checked = (await api("/api/info/verbose")).verbose; } catch (_) {} };
 WORLD.commands = (orig => async () => { await orig(); if (!$("info-out").childElementCount) document.querySelector('[data-info="status"]').click(); })(WORLD.commands);
+
+// ---- instances: start / stop maps -------------------------------------------
+const GiB = 1024 ** 3;
+let instTimer = null;
+const stateLabel = { running: "running", starting: "starting…", stopped: "stopped", failing: "failing (retrying)" };
+async function loadInstances() {
+  let r;
+  try { r = await api("/api/instances"); }
+  catch (e) { $("inst-body").replaceChildren(el("tr", {}, el("td", { className: "error", textContent: e.message }))); return; }
+  const mem = r.memory;
+  const pct = mem ? Math.min(100, r.game_ram / mem * 100) : 0;
+  $("ram-fill").style.width = `${pct}%`;
+  $("ram-fill").className = pct > 90 ? "bad" : pct > 75 ? "warn" : "";
+  $("ram-text").textContent = mem ? `Game servers use ${(r.game_ram / GiB).toFixed(1)} GiB of ${(mem / GiB).toFixed(0)} GiB`
+    : `Game servers use ${(r.game_ram / GiB).toFixed(1)} GiB`;
+  $("inst-note").textContent = r.stand_in ? "" : "The Kubernetes stand-in is not answering, so maps can't be started or stopped right now.";
+  const body = $("inst-body"); body.replaceChildren();
+  for (const i of r.instances) {
+    const btn = el("button", { className: `small ${i.state === "stopped" ? "primary" : "danger"}` });
+    btn.textContent = i.state === "stopped" ? "Start" : "Stop";
+    btn.disabled = i.locked;
+    if (i.locked) btn.title = "The main sietch stops with the server — use Restart on the Overview page";
+    btn.addEventListener("click", () => instanceAct(i, i.state === "stopped" ? "start" : "stop", false));
+    const since = i.since ? duration(Math.max(0, Math.round(Date.now() / 1000 - i.since))) : "–";
+    body.append(el("tr", { className: i.state === "stopped" ? "dim" : "" },
+      el("td", {}, el("strong", { textContent: i.name }), i.parked ? el("span", { className: "tag", textContent: "kept stopped" }) : null,
+        i.kind === "copy" ? el("span", { className: "tag", textContent: "copy" }) : null),
+      el("td", {}, el("span", { className: `mark ${i.state === "running" ? "ok" : i.state === "stopped" ? "" : "warn"}`, textContent: "● " }),
+        document.createTextNode(stateLabel[i.state] || i.state)),
+      el("td", { textContent: i.state === "stopped" ? "–" : String(i.players) }),
+      el("td", { textContent: i.ram ? `${(i.ram / GiB).toFixed(1)} GiB` : "–" }),
+      el("td", { textContent: i.state === "stopped" ? "–" : since }),
+      el("td", {}, btn)));
+  }
+  if (!r.instances.length) body.append(el("tr", {}, el("td", { className: "muted", textContent: "No instances yet." })));
+}
+async function instanceAct(i, action, force) {
+  if (!force && action === "stop" && !confirm(`Stop ${i.name}? Its game server shuts down and frees its RAM.`)) return;
+  const out = $("inst-result"); out.className = "result"; out.textContent = `${action === "stop" ? "Stopping" : "Starting"} ${i.name}…`;
+  try {
+    const r = await api("/api/instances", { partition: i.partition, action, force });
+    if (r.confirm) {
+      if (confirm(`${r.output}\n\nStop it anyway?`)) return instanceAct(i, action, true);
+      out.textContent = "Cancelled."; return;
+    }
+    out.className = `result ${r.ok ? "ok" : "bad"}`; out.textContent = r.output;
+  } catch (e) { out.className = "result bad"; out.textContent = e.message; }
+  setTimeout(loadInstances, 3000);
+}
+$("inst-refresh").addEventListener("click", loadInstances);
+WORLD.instances = () => {
+  loadInstances();
+  clearInterval(instTimer);
+  instTimer = setInterval(() => { if (!$("tab-instances").hidden) loadInstances(); }, 10000);
+};

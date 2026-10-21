@@ -346,6 +346,28 @@
     </div>
   </section>
 
+  <section id="tab-instances" class="tab" hidden>
+    <div class="card">
+      <div class="player-head">
+        <div>
+          <h2>Map instances</h2>
+          <p class="muted small-text">Every map is its own game server using several GB of RAM. Stop the ones nobody needs;
+            dungeons and hubs start again by themselves when a player travels there.</p>
+        </div>
+        <button id="inst-refresh" class="ghost small">Refresh</button>
+      </div>
+      <div class="ram"><div class="ram-bar"><span id="ram-fill"></span></div><span id="ram-text" class="muted"></span></div>
+      <p id="inst-result" class="result" role="status"></p>
+      <div class="table-wrap">
+        <table class="inv inst">
+          <thead><tr><th>Instance</th><th>State</th><th>Players</th><th>RAM</th><th>Running for</th><th></th></tr></thead>
+          <tbody id="inst-body"></tbody>
+        </table>
+      </div>
+      <p id="inst-note" class="muted small-text"></p>
+    </div>
+  </section>
+
   <section id="tab-bases" class="tab" hidden>
     <div class="players">
       <aside class="card player-list-card">

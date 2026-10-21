@@ -991,3 +991,60 @@ class LiveStatusTests(unittest.TestCase):
                              opener=lambda *a, **k: None)
         self.assertFalse(n.send("start", "Server online"))
         self.assertTrue(n.send("crash", "Server problem"))
+
+
+class InstanceTests(unittest.TestCase):
+    FARM = [
+        {"partition": "1", "map": "Survival_1", "dim": "0", "label": "", "players": "3", "ready": "t", "alive": "t"},
+        {"partition": "2", "map": "Overmap", "dim": "0", "label": "", "players": "0", "ready": "t", "alive": "t"},
+        {"partition": "8", "map": "DeepDesert_1", "dim": "0", "label": "", "players": "", "ready": "", "alive": ""},
+        {"partition": "101", "map": "DeepDesert_1", "dim": "1", "label": "Deep Desert D1", "players": "2", "ready": "t", "alive": "t"},
+        {"partition": "102", "map": "DeepDesert_1", "dim": "2", "label": "Deep Desert D2", "players": "", "ready": "", "alive": ""},
+        {"partition": "40", "map": "CB_Dungeon_Hephaestus", "dim": "0", "label": "", "players": "", "ready": "", "alive": ""},
+    ]
+    MOCK = {"maps": [{"map": "Survival_1", "key": "default/survival-1", "desired": 1}],
+            "knownMaps": [{"map": "Overmap", "name": "overmap", "partitionId": 2}]}
+
+    def test_rows(self):
+        from dunectl import instances
+        rows = instances.build_rows(self.MOCK, self.FARM, {1: {"rss": 6 * 2**30, "started": 0}}, {102})
+        by = {r["partition"]: r for r in rows}
+        self.assertTrue(by[1]["locked"])
+        self.assertEqual(by[1]["ram"], 6 * 2**30)
+        self.assertEqual((by[8]["state"], by[8]["kind"]), ("stopped", "map"))  # hubs are offered while stopped
+        self.assertEqual((by[101]["name"], by[101]["players"], by[101]["kind"]), ("Deep Desert D1", 2, "copy"))
+        self.assertTrue(by[102]["parked"])
+        self.assertNotIn(40, by)  # a stopped dungeon isn't listed
+
+    def test_processes_and_guards(self):
+        from dunectl import instances
+        proc = tempfile.mkdtemp()
+        os.makedirs(os.path.join(proc, "123"))
+        with open(os.path.join(proc, "123", "cmdline"), "wb") as fh:
+            fh.write(b"/x/DuneSandboxServer-Linux-Shipping\0DeepDesert_1\0-Port=27059\0-PartitionIndex=101\0")
+        with open(os.path.join(proc, "123", "status"), "w") as fh:
+            fh.write("Name:\tx\nVmRSS:\t 5242880 kB\n")
+        self.assertEqual(instances.game_processes(proc)[101]["rss"], 5 * 2**30)
+
+        base = tempfile.mkdtemp()
+        calls = []
+        nl = chr(10)
+        csv_text = ",".join(self.FARM[0]) + nl + nl.join(",".join(r.values()) for r in self.FARM) + nl
+
+        def run_op(argv, timeout):
+            calls.append(argv)
+            return (0, csv_text, "") if argv[0] == "db-sql" else (0, "OK", "")
+        ctl = instances.InstanceControl(base, SCRIPTS, run_op, lambda *a: None)
+        ctl._mock = lambda: self.MOCK
+        with self.assertRaises(ValueError):
+            ctl.act(1, "stop", False, "x")  # the main sietch
+        r = ctl.act(101, "stop", False, "x")
+        self.assertTrue(r["confirm"])  # 2 players on it
+        r = ctl.act(101, "stop", True, "x")
+        self.assertTrue(r["ok"])
+        self.assertEqual(calls[-1], ["dimension-down", "101"])
+        import admin_park
+        self.assertIn(101, admin_park.parked_ids(base))  # stays stopped across restarts
+        ctl.act(101, "start", False, "x")
+        self.assertEqual(calls[-1], ["dimension-up", "101"])
+        self.assertNotIn(101, admin_park.parked_ids(base))

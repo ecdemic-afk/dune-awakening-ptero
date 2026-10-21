@@ -40,7 +40,7 @@ $("logout").addEventListener("click", async () => { await api("/api/logout", {})
 const GROUPS = {
   overview: [["overview", "Overview"]],
   players: [["players", "Players"], ["items", "Items"], ["vehicles", "Vehicles"], ["kits", "Kits & gifts"]],
-  world: [["map", "Map"], ["bases", "Bases"], ["guilds", "Guilds"]],
+  world: [["map", "Map"], ["instances", "Instances"], ["bases", "Bases"], ["guilds", "Guilds"]],
   server: [["config", "Settings"], ["schedule", "Schedule"], ["backups", "Backups"], ["commands", "Commands"]],
   console: [["console", "Console"]],
 };
