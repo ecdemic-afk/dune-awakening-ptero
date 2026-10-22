@@ -49,6 +49,9 @@ HARMLESS = re.compile(r"Ggwp config not available|GGWP is not configured|environ
                       r"|GetMagnitude called for Data|Failed to remove last issued grant"
                       # the access-list reply is answered locally (fls-stub) and the game treats it as allowed
                       r"|Failed to parse PlayerAuthorizationsByResourceId"
+                      # the Director polling the Kubernetes stand-in while it is down: one 25-line stack
+                      # a second; the supervisor reports a stopped stand-in itself, in one line
+                      r"|Http Request failed in ListKubernetesResourceJson|Failed to list IGWO server set scales"
                       r"|HttpsRedirectionMiddleware|determine the https port for redirect"
                       # Director housekeeping, and travel retries for map copies that are cold or still loading
                       r"|LOH compaction needed|Slow operation:|Failed to process travel queue for partition")
@@ -131,8 +134,13 @@ class Follower(threading.Thread):
         except OSError:
             return
         pos = self.offsets.get(path, 0)
-        if size < pos:  # rotated/truncated
-            pos = 0
+        if size < pos:
+            # Services only ever append, so a shrink is rotate-logs trimming the file to its
+            # last 50 MB: lines already shown. Re-reading from 0 replayed all of them, so carry
+            # on from the new end once the rewrite has finished.
+            size = self._settled_size(path, size)
+            self.offsets[path] = size
+            return
         if size == pos:
             return
         with open(path, "rb") as fh:
@@ -145,6 +153,20 @@ class Follower(threading.Thread):
         service = os.path.basename(path)[:-4]
         for raw in chunk[:consumed].decode("utf-8", "replace").splitlines():
             self.line(service, raw.rstrip())
+
+    def _settled_size(self, path: str, size: int, wait: float = 0.25, limit: int = 40) -> int:
+        """The file's size once it stops changing (the trim rewrites it in place)."""
+        for _ in range(limit):
+            if self._halt.wait(wait):
+                break
+            try:
+                now = os.path.getsize(path)
+            except OSError:
+                return size
+            if now == size:
+                break
+            size = now
+        return size
 
     def line(self, service: str, text: str) -> None:
         if not text:

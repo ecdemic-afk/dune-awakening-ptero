@@ -1048,3 +1048,24 @@ class InstanceTests(unittest.TestCase):
         ctl.act(101, "start", False, "x")
         self.assertEqual(calls[-1], ["dimension-up", "101"])
         self.assertNotIn(101, admin_park.parked_ids(base))
+
+
+class LogTrimTests(unittest.TestCase):
+    def test_trimmed_log_is_not_replayed(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "director.log")
+        nl = chr(10)
+        with open(p, "w") as fh:
+            fh.write(("[1:2:3 1 ERR X] old line" + nl) * 50)
+        out = []
+        f = logstream.Follower(d, lambda t, m, lv: out.append(m))
+        f.offsets[p] = os.path.getsize(p)  # already shown
+        with open(p, "w") as fh:  # rotate-logs: rewritten with only its tail
+            fh.write("=== log trimmed ===" + nl + ("[1:2:3 1 ERR X] old line" + nl) * 5)
+        f._settled_size = lambda path, size: size
+        f._read(p)
+        self.assertEqual(out, [])  # nothing replayed
+        with open(p, "a") as fh:
+            fh.write("[1:2:3 1 ERR X] new line" + nl)
+        f._read(p)
+        self.assertEqual(out, ["[1:2:3 1 ERR X] new line"])
