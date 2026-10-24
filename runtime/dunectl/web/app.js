@@ -35,37 +35,89 @@ $("login-form").addEventListener("submit", async (ev) => {
 });
 $("logout").addEventListener("click", async () => { await api("/api/logout", {}).catch(() => {}); showLogin(); });
 
-// ---- tabs ----------------------------------------------------------------
-// Five sections in the header; a section with several pages shows them in a second row.
-const GROUPS = {
-  overview: [["overview", "Overview"]],
-  players: [["players", "Players"], ["items", "Items"], ["vehicles", "Vehicles"], ["kits", "Kits & gifts"]],
-  world: [["map", "Map"], ["instances", "Instances"], ["bases", "Bases"], ["guilds", "Guilds"]],
-  server: [["config", "Settings"], ["schedule", "Schedule"], ["backups", "Backups"], ["commands", "Commands"]],
-  console: [["console", "Console"]],
+// ---- navigation ----------------------------------------------------------
+// Line icons (24x24, stroked). Kept here so the page needs no icon font or CDN.
+const ICONS = {
+  home: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
+  users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
+  box: "M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8",
+  car: "M5 17h14M5 17a2 2 0 1 1-4 0v-5l3-6h16l3 6v5a2 2 0 1 1-4 0M7 17a2 2 0 1 0 4 0M13 17a2 2 0 1 0 4 0M3 12h18",
+  gift: "M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 1 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 1 0 0-5C13 2 12 7 12 7z",
+  map: "M9 4L3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14",
+  layers: "M12 2l10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5",
+  base: "M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6",
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
+  archive: "M21 8v13H3V8M1 3h22v5H1zM10 12h4",
+  bolt: "M13 2L3 14h9l-1 8 10-12h-9z",
+  terminal: "M4 17l6-6-6-6M12 19h8",
+  door: "M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9M10 12v.01M13 4.6v16.6L6 20V5.6z",
+  tag: "M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8zM7 7h.01",
+  menu: "M3 6h18M3 12h18M3 18h18",
 };
-const groupOf = (page) => Object.keys(GROUPS).find((g) => GROUPS[g].some(([p]) => p === page)) || "overview";
-const lastPage = {};
-document.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => {
-  const g = b.dataset.group;
-  openTab(lastPage[g] || GROUPS[g][0][0]);
+function icon(name, cls = "ico") {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", cls); s.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", ICONS[name] || ""); s.append(p);
+  return s;
+}
+// [group, [[page, label, icon, description], ...]]
+const NAV = [
+  ["", [["overview", "Overview", "home", "Server state, quick actions and health at a glance."]]],
+  ["Players", [
+    ["players", "Players", "users", "Find a player by name; inventory, progression, bans and more."],
+    ["items", "Items", "box", "The whole item catalogue, with pictures. Give anything to anyone."],
+    ["vehicles", "Vehicles", "car", "Spawn a vehicle next to a player."],
+    ["kits", "Kits & gifts", "gift", "Item bundles, gifts to everyone online, and the welcome gift."]]],
+  ["World", [
+    ["map", "Map", "map", "Where everyone is, teleports, saved spots and Deep Desert resources."],
+    ["instances", "Instances", "layers", "Every running map with its players and memory. Start or stop maps."],
+    ["bases", "Bases", "base", "Every base, its water and power. Refills."],
+    ["guilds", "Guilds", "shield", "Members, leaders, invites."]]],
+  ["Server", [
+    ["config", "Settings", "sliders", "Every server and game setting, explained."],
+    ["schedule", "Schedule", "clock", "Automatic restarts, backups and announcements."],
+    ["backups", "Backups", "archive", "Save the world, or bring an older one back."],
+    ["commands", "Commands", "bolt", "Server information and every game operation as a form."],
+    ["console", "Console", "terminal", "Live output from every part of the server."]]],
+];
+const PAGE = Object.fromEntries(NAV.flatMap(([, pages]) => pages.map((p) => [p[0], p])));
+$("side-nav").replaceChildren(...NAV.map(([group, pages]) => {
+  const box = document.createElement("div");
+  box.className = "nav-group";
+  if (group) box.append(Object.assign(document.createElement("span"), { className: "nav-label", textContent: group }));
+  for (const [page, label, ico] of pages) {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.page = page;
+    b.append(icon(ico), document.createTextNode(label));
+    b.addEventListener("click", () => openTab(page));
+    box.append(b);
+  }
+  return box;
 }));
+document.querySelectorAll("[data-icon]").forEach((e) => e.append(icon(e.dataset.icon)));
+$("menu-btn").append(icon("menu"));
+function setMenu(open) {
+  document.body.classList.toggle("menu-open", open);
+  $("scrim").hidden = !open;
+  $("menu-btn").setAttribute("aria-expanded", String(open));
+}
+$("menu-btn").addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
+$("scrim").addEventListener("click", () => setMenu(false));
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") setMenu(false); });
+
 function openTab(name) {
   if (!document.getElementById(`tab-${name}`)) name = "overview";
-  const group = groupOf(name);
-  lastPage[group] = name;
-  document.querySelectorAll("[data-group]").forEach((b) => {
-    if (b.dataset.group === group) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  const [, label, , desc] = PAGE[name] || ["", name, "", ""];
+  $("page-title").textContent = label;
+  $("page-desc").textContent = desc;
+  document.querySelectorAll("#side-nav [data-page]").forEach((b) => {
+    if (b.dataset.page === name) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
-  const sub = $("subnav");
-  sub.hidden = GROUPS[group].length < 2;
-  sub.replaceChildren(...GROUPS[group].map(([page, label]) => {
-    const b = document.createElement("button");
-    b.textContent = label;
-    if (page === name) b.setAttribute("aria-current", "page");
-    b.addEventListener("click", () => openTab(page));
-    return b;
-  }));
+  setMenu(false);
+  window.scrollTo(0, 0);
   document.querySelectorAll(".tab").forEach((s) => { s.hidden = s.id !== `tab-${name}`; });
   if (name === "config" && !configDirty) loadConfig();
   if (name === "players" && window.loadPlayers) window.loadPlayers();
@@ -98,6 +150,7 @@ async function refreshStatus() {
   $("joinable").textContent = status.state !== "running" ? "no" : status.joinable ? "yes" : "loading maps…";
   $("uptime").textContent = duration(status.uptime);
   $("version").textContent = status.version;
+  $("side-version").textContent = `v${status.version}`;
 
   const p = status.pending;
   $("pending").hidden = !p;

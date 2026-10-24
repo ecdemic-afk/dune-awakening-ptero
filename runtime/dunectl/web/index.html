@@ -9,7 +9,9 @@
 <body>
 <main id="login" class="login" hidden>
   <form id="login-form" class="card login-card">
-    <h1>Dune server</h1>
+    <span class="brand-mark big" aria-hidden="true"></span>
+    <h1>Server panel</h1>
+    <p class="muted">Dune: Awakening</p>
     <label for="password">Panel password</label>
     <input id="password" type="password" autocomplete="current-password" required autofocus>
     <button type="submit" class="primary">Sign in</button>
@@ -17,29 +19,38 @@
   </form>
 </main>
 
-<div id="app" hidden>
-  <header class="top">
-    <div class="title">
-      <h1 id="server-name">Dune server</h1>
-      <span id="state" class="badge">…</span>
+<div id="app" class="shell" hidden>
+  <aside id="sidebar" class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div class="brand-text">
+        <span id="server-name" class="brand-name">Dune server</span>
+        <span id="state" class="badge">…</span>
+      </div>
     </div>
-    <nav class="tabs" aria-label="Sections">
-      <button data-group="overview" aria-current="page">Overview</button>
-      <button data-group="players">Players</button>
-      <button data-group="world">World</button>
-      <button data-group="server">Server</button>
-      <button data-group="console">Console</button>
-    </nav>
-    <button id="logout" class="ghost">Sign out</button>
+    <nav id="side-nav" class="side-nav" aria-label="Pages"></nav>
+    <div class="side-foot">
+      <span id="side-version" class="muted"></span>
+      <button id="logout" class="ghost small">Sign out</button>
+    </div>
+  </aside>
+  <div id="scrim" class="scrim" hidden></div>
+
+  <div class="main">
+  <header class="topbar">
+    <button id="menu-btn" class="ghost icon-btn menu-btn" aria-label="Open the menu" aria-controls="sidebar" aria-expanded="false"></button>
+    <div class="page-head">
+      <h1 id="page-title">Overview</h1>
+      <p id="page-desc" class="muted"></p>
+    </div>
   </header>
-  <nav id="subnav" class="subnav" aria-label="Pages" hidden></nav>
 
   <section id="tab-overview" class="tab">
     <div class="stats">
-      <div class="card stat"><span class="label">Players online</span><span id="players" class="value">–</span></div>
-      <div class="card stat"><span class="label">Joinable</span><span id="joinable" class="value">–</span></div>
-      <div class="card stat"><span class="label">Up for</span><span id="uptime" class="value">–</span></div>
-      <div class="card stat"><span class="label">Version</span><span id="version" class="value">–</span></div>
+      <div class="card stat"><span class="stat-icon" data-icon="users"></span><span class="label">Players online</span><span id="players" class="value">–</span></div>
+      <div class="card stat"><span class="stat-icon" data-icon="door"></span><span class="label">Players can join</span><span id="joinable" class="value">–</span></div>
+      <div class="card stat"><span class="stat-icon" data-icon="clock"></span><span class="label">Up for</span><span id="uptime" class="value">–</span></div>
+      <div class="card stat"><span class="stat-icon" data-icon="tag"></span><span class="label">Version</span><span id="version" class="value">–</span></div>
     </div>
 
     <div id="pending" class="card notice" hidden>
@@ -546,6 +557,7 @@
       <ul id="backups" class="list backups"></ul>
     </div>
   </section>
+  </div>
 </div>
 <script src="app.js"></script>
 <script src="players.js"></script>
