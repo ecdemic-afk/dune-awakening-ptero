@@ -33,11 +33,9 @@ source "$SCRIPTS_DIR/multi-sietch-config.sh"
 TEMPLATE="$BASE/server/scripts/setup/templates/world-template.yaml"
 [ -f "$TEMPLATE" ] || die "world-template.yaml missing at $TEMPLATE"
 
-# Skip if our marker is already there.
-if grep -q "# dim-injected" "$TEMPLATE" 2>/dev/null; then
-  log "world-template.yaml already patched — skipping"
-  exit 0
-fi
+# An already-patched template is re-patched from scratch (the python strips the
+# previous entries first): skipping it kept lowered copy counts in the BattleGroup,
+# so removed copies stayed in the in-game instance picker as offline choices.
 
 # Serialize the destinations spec for python via env vars.
 # Each row: map|dim_count|dim_base|label|warm_partition_id
@@ -48,12 +46,12 @@ while IFS='|' read -r map count base label warm; do
   DESTS_SPEC+="${map}|${count}|${base}|${label}|${warm}"$'\n'
 done < <(multi_sietch_destinations)
 
-if [ -z "$DESTS_SPEC" ]; then
+if [ -z "$DESTS_SPEC" ] && ! grep -q "# dim-injected" "$TEMPLATE" 2>/dev/null; then
   log "no dimensional destinations enabled — leaving template untouched"
   exit 0
 fi
 
-log "patching $TEMPLATE with dimensional partitions for: $(awk -F'|' '{print $1}' <<<"$DESTS_SPEC" | xargs)"
+log "patching $TEMPLATE with dimensional partitions for: $(awk -F'|' '{print $1}' <<<"$DESTS_SPEC" | xargs) (none = remove all copies)"
 
 DESTS_SPEC="$DESTS_SPEC" python3 - "$TEMPLATE" <<'PYEOF'
 import os
@@ -79,6 +77,22 @@ for line in spec.strip().splitlines():
 
 with open(path) as f:
     lines = f.readlines()
+
+# Undo the previous run: drop our marker and every dimension>0 entry (Funcom ships
+# dimension 0 only; fmt_entry below writes 7-line entries), so counts can go down.
+kept: list[str] = []
+k = 0
+while k < len(lines):
+    s = lines[k].lstrip()
+    if s.startswith("# dim-injected"):
+        k += 1
+        continue
+    if s.startswith("- dimension:") and s.split(":", 1)[1].strip() != "0":
+        k += 7
+        continue
+    kept.append(lines[k])
+    k += 1
+lines = kept
 
 def fmt_entry(indent: str, pid: int, dim: int) -> list[str]:
     """One partition entry. `indent` is the spaces before the leading dash."""

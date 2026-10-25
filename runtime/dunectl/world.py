@@ -254,6 +254,11 @@ class WorldTools:
             if not GUILD_NAME_RE.match(name):
                 raise ValueError("the name must be 2-32 characters")
             return self._write(["guild-rename", gid, name], who, f"guild #{gid} renamed to {name}")
+        if action == "faction":
+            faction = str(body.get("faction", "")).lower()
+            if faction not in ("atreides", "harkonnen", "none"):
+                raise ValueError("faction must be atreides, harkonnen or none")
+            return self._write(["guild-set-faction", gid, faction], who, f"guild #{gid} pledged to {faction}")
         if action in ("set-role", "kick"):
             member = str(body.get("player_id", ""))
             if not ID_RE.match(member) and not FLS_RE.match(member):

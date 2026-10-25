@@ -49,8 +49,9 @@ auto_stop = "10m"
 always_warm = ["Survival_1", "Overmap", "DeepDesert_1"]
 # Extra copies ("dimensions") players can pick from. Each one is a full game
 # server (~5 GB of RAM) that runs all the time, and uses one dimension slot
-# from [ports]. Lowering a number keeps the extra copies' data but stops
-# starting them. The health check says how many fit in your memory.
+# from [ports]. 0 = only the main map, and no instance choice in game.
+# Lowering a number removes the extra copies (and anything built in them) at
+# the next restart. The health check says how many fit in your memory.
 deep_desert_dimensions = 1
 arrakeen_dimensions = 0
 harko_dimensions = 0

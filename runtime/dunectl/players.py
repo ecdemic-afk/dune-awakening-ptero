@@ -94,6 +94,13 @@ def action_argv(fls: str, action: str, body: dict, known_item=lambda t: True) ->
         if faction not in ("atreides", "harkonnen"):
             raise ValueError("faction must be atreides or harkonnen")
         return ["faction-rep", fls, faction, str(_int(body.get("amount"), -1_000_000, 1_000_000, "Reputation"))]
+    if action == "join-house":  # reputation alone never changes the house a player belongs to
+        faction = str(body.get("faction", "")).lower()
+        if faction == "none":
+            return ["remove-faction", fls]
+        if faction not in ("atreides", "harkonnen"):
+            raise ValueError("house must be atreides, harkonnen or none")
+        return ["set-faction-tier", fls, faction, str(_int(body.get("tier", 0), 0, 20, "Tier"))]
     if action == "rename":
         name = str(body.get("name", "")).strip()
         if not 2 <= len(name) <= 32 or not name.isprintable():

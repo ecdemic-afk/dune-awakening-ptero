@@ -663,6 +663,12 @@ class PlayerToolsTests(unittest.TestCase):
                          ["item-edit", "9", "stack=4", "quality=1"])
         with self.assertRaises(ValueError):
             a(self.FLS, "drop-database", {})
+        self.assertEqual(a(self.FLS, "join-house", {"faction": "Harkonnen", "tier": 3}),
+                         ["set-faction-tier", self.FLS, "harkonnen", "3"])
+        self.assertEqual(a(self.FLS, "join-house", {"faction": "none"}), ["remove-faction", self.FLS])
+        for bad in ({"faction": "fremen"}, {"faction": "atreides", "tier": 21}):
+            with self.assertRaises(ValueError):
+                a(self.FLS, "join-house", bad)
 
     def test_list_detail_and_kit(self):
         listed = self.tools.list()
@@ -747,6 +753,13 @@ class WorldToolsTests(unittest.TestCase):
             self.tools.run("raw", ["{}"], "x")
         self.tools.run("kick", ["DE0BCCAA2501BF22"], "x")
         self.assertEqual(self.calls[-1], ["kick", "DE0BCCAA2501BF22"])
+        self.assertIn("guild-set-faction", ops)
+
+    def test_guild_faction(self):
+        self.tools.guild_act("7", "faction", {"faction": "Harkonnen"}, "x")
+        self.assertEqual(self.calls[-1], ["guild-set-faction", "7", "harkonnen"])
+        with self.assertRaises(ValueError):
+            self.tools.guild_act("7", "faction", {"faction": "fremen"}, "x")
 
     def test_refill_queues_when_the_map_runs(self):
         self.reply = (1, "", "[admin-publish] ERROR base-water-refill: HaggaBasin (partition 1) has 1 live server(s)")

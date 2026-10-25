@@ -81,6 +81,9 @@
 #   faction-rep <player_id> <atreides|harkonnen|1|2> <signed-amount>
 #                                                -- adjust Great-House reputation (offline only); rebuilds the
 #                                                   FactionPlayerComponent.m_FactionDataArray jsonb on the controller
+#   set-faction-tier <player_id> <atreides|harkonnen|1|2> <tier 0-20>
+#                                                -- JOIN the house (alignment) and set its reputation tier (offline only)
+#   remove-faction <player_id>                   -- leave their house: alignment None, reputation cleared (offline only)
 #
 # Player/character DESTRUCTIVE write subcommands (offline-gated; hardened beyond
 # dune-admin, which applies no server-side guard). Ported from Icehunter/
@@ -98,6 +101,7 @@
 #   guild-invites <guild_id>                     -- pending invites: invitee + sender
 #   guild-describe <guild_id> <description>      -- set description (LIVE)
 #   guild-rename <guild_id> <new-name>           -- rename (uniqueness-checked; in-game after restart)
+#   guild-set-faction <guild_id> <atreides|harkonnen|none> -- pledge the guild to a house (in-game after restart)
 #   guild-set-role <guild_id> <player_id> <50|100> -- 100 transfers leadership (old leader -> 50); 50 demotes
 #   guild-kick <guild_id> <player_id>            -- remove a member (refuses the leader; LIVE)
 #   guild-create <player> <name> [description]   -- create a guild with <player> as leader (LIVE)
@@ -4814,6 +4818,44 @@ SQL
         fi
         echo "[admin-publish] OK guild-rename id=$gid name=$name_trimmed (in-game after next restart)"
         echo "publish=db-write guild-rename id=$gid"
+        exit 0
+        ;;
+
+    guild-set-faction)
+        # Pledge a guild to a house (or back to none). The game only lets a guild
+        # pledge to its leader's house, which left a one-house server with no second
+        # side for the Landsraad. Like guild-rename there is no proc: one UPDATE under
+        # the game's guild lock; the faction id comes from dune.factions (FK target).
+        # Running servers pick it up when they reload guild data (next restart).
+        gid="${1:?usage: guild-set-faction <guild_id> <atreides|harkonnen|none>}"
+        fac="${2:?usage: guild-set-faction <guild_id> <atreides|harkonnen|none>}"
+        case "$gid" in *[!0-9]*|"") echo "[admin-publish] ERROR guild-set-faction: guild id must be numeric" >&2; exit 2;; esac
+        case "$(printf '%s' "$fac" | tr '[:upper:]' '[:lower:]')" in
+            atreides) fname=Atreides ;;
+            harkonnen) fname=Harkonnen ;;
+            none) fname=None ;;
+            *) echo "[admin-publish] ERROR guild-set-faction: faction must be atreides, harkonnen or none" >&2; exit 2 ;;
+        esac
+        dune_require_tables dune.guilds dune.factions || exit 3
+        rc=0
+        after=$(dune_psql_q --set=gid="$gid" --set=f="$fname" -tA -v ON_ERROR_STOP=1 <<'SQL' | tail -n1 | tr -d '\r\n'
+BEGIN;
+SELECT dune.guilds_get_exclusive_operation_lock();
+UPDATE dune.guilds SET guild_faction = (SELECT id FROM dune.factions WHERE name = :'f' LIMIT 1)
+WHERE guild_id = :'gid'::bigint AND EXISTS (SELECT 1 FROM dune.factions WHERE name = :'f');
+COMMIT;
+SELECT COALESCE((SELECT f.name FROM dune.guilds g JOIN dune.factions f ON f.id = g.guild_faction
+                 WHERE g.guild_id = :'gid'::bigint), 'missing');
+SQL
+) || rc=$?
+        [ "$rc" -eq 0 ] || { echo "[admin-publish] ERROR guild-set-faction: transaction failed (rc=$rc)" >&2; exit 1; }
+        case "$after" in
+            "$fname") ;;
+            missing) echo "[admin-publish] ERROR guild-set-faction: no guild with id $gid" >&2; exit 1 ;;
+            *) echo "[admin-publish] ERROR guild-set-faction: this game build has no '$fname' faction — guild is still '$after'" >&2; exit 1 ;;
+        esac
+        echo "[admin-publish] OK guild-set-faction id=$gid faction=$fname (in-game after next restart)"
+        echo "publish=db-write guild-set-faction id=$gid"
         exit 0
         ;;
 

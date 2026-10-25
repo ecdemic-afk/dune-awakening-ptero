@@ -3,8 +3,9 @@
 The core seeds one world_partition row per copy and starts every row at boot;
 lowering a count never removed rows, so a server that once had 3 Deep Desert
 copies kept starting 3 game servers (each several GB of RAM) whatever the
-config said. Copies above the configured count are PARKED instead — their row
-and data stay, they just don't start — and un-parked when the count goes up.
+config said. prestart.sh now deletes copies above the count (so they also leave
+the in-game picker); this parking stays as the fallback if that delete fails, and
+un-parks copies older versions parked once the count goes back up.
 
 Survival_1 copies are player sietches (bases live there) and are never touched.
 """

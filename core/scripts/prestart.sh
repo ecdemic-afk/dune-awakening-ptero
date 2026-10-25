@@ -477,12 +477,25 @@ fi
 # DUNE_HARKO_DIMENSIONS / DUNE_FALLEN_LIGHT_DIMENSIONS.
 #
 # Idempotent (ON CONFLICT DO NOTHING). Operator-changeable: increase
-# the dim count via panel env vars and the rows append on next boot
-# (decreasing the count does NOT delete rows — operator must DELETE
-# from world_partition manually, otherwise the spawner re-runs but
-# Director still sees the row).
+# the dim count and the rows append on next boot; decrease it and the
+# copies above the count are DELETED here (like sietch-remove), so they
+# leave the in-game instance picker instead of lingering there offline
+# (patch-world-template.sh drops them from the BattleGroup to match).
+# Survival_1 sietches are not counted here and never touched.
 # --------------------------------------------------------------------------
 source "$(dirname "$(readlink -f "$0")")/multi-sietch-config.sh"
+DIM_TRIM=""
+while IFS='|' read -r map count _rest; do
+  [ -z "$map" ] && continue
+  DIM_TRIM+="DELETE FROM dune.world_partition WHERE map = '$map' AND dimension_index > ${count//[!0-9]/};"$'\n'
+done < <(multi_sietch_destinations)
+[ "${DUNE_ENABLE_FALLEN_LIGHT}" = "true" ] || DIM_TRIM+="DELETE FROM dune.world_partition WHERE map = 'SH_FallenLight' AND dimension_index > 0;"$'\n'
+TRIMMED=$(env -i HOME=/tmp LC_ALL=C $PG_RUN_ENV \
+  "$PG_BIN/psql" -h 127.0.0.1 -p "$DUNE_PG_PORT" -U postgres -d dune -tA <<SQL 2>/dev/null | grep -c '^DELETE [1-9]' || true
+$DIM_TRIM
+SQL
+)
+[ "${TRIMMED:-0}" = "0" ] || log "  removed map copies above the configured counts ($TRIMMED map(s))"
 DIM_VALUES="$(multi_sietch_partition_values)"
 if [ -n "$DIM_VALUES" ]; then
   log "Seeding dimensional partitions for multi-Sietch travel..."

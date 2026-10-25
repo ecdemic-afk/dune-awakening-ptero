@@ -173,6 +173,9 @@
             <form id="rep-form"><label>Reputation
               <select id="rep-faction"><option value="atreides">Atreides</option><option value="harkonnen">Harkonnen</option></select>
               <input id="rep-amount" type="number" step="1" required aria-label="Reputation amount"></label><button>Apply</button></form>
+            <form id="house-form" title="Reputation alone doesn't change a player's house; this does."><label>Join house
+              <select id="house-faction"><option value="atreides">Atreides</option><option value="harkonnen">Harkonnen</option><option value="none">None (leave)</option></select>
+              <input id="house-tier" type="number" min="0" max="20" value="0" aria-label="Reputation tier (0-20)" title="Reputation tier (0-20)"></label><button>Apply</button></form>
             <form id="rename-form"><label>Rename<input id="rename" maxlength="32" required></label><button>Rename</button></form>
           </div>
           <div class="actions">
@@ -430,6 +433,12 @@
           <form id="g-desc-form" class="actions">
             <input id="g-desc" maxlength="500" placeholder="Description" aria-label="Description">
             <button>Save description</button>
+          </form>
+          <form id="g-faction-form" class="actions">
+            <label>Pledged to
+              <select id="g-faction"><option value="atreides">Atreides</option><option value="harkonnen">Harkonnen</option><option value="none">No house</option></select></label>
+            <button>Set house</button>
+            <span class="muted small-text">In game after the next restart. The Landsraad needs a guild on each side.</span>
           </form>
           <p id="g-result" class="result" role="status"></p>
         </div>

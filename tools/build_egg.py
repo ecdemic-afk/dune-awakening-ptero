@@ -50,13 +50,13 @@ VARIABLES = [
      "nullable|string|regex:/^[0-9]+[smh]$/"),
     ("Deep Desert Copies", "DEEP_DESERT_COPIES", "1",
      "Extra Deep Desert instances players can pick, each always running (~5 GB of RAM). "
-     "Copies above this number stay cold; their data is kept.",
+     "0 = only the main Deep Desert (no instance choice in game). Copies above this number are removed at the next restart.",
      "nullable|integer|between:0,12"),
     ("Arrakeen Copies", "ARRAKEEN_COPIES", "0",
-     "Extra Arrakeen instances, each always running (~5 GB). Copies above this number stay cold.",
+     "Extra Arrakeen instances, each always running (~5 GB). Copies above this number are removed at the next restart.",
      "nullable|integer|between:0,12"),
     ("Harko Village Copies", "HARKO_COPIES", "0",
-     "Extra Harko Village instances, each always running (~5 GB). Copies above this number stay cold.",
+     "Extra Harko Village instances, each always running (~5 GB). Copies above this number are removed at the next restart.",
      "nullable|integer|between:0,12"),
     ("Web Panel Password", "PANEL_PASSWORD", "",
      "Password for the web panel at http://<server IP>:<primary port + 32>. Empty = the panel is off. "

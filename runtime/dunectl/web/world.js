@@ -245,6 +245,8 @@ async function openGuild(id, keep = false) {
   $("g-name").textContent = g.name || g.guild_name || `Guild #${id}`;
   $("g-sub").textContent = `${g.faction || ""} · ${g.members || 0} members`;
   $("g-desc").value = g.description || "";
+  const house = String(g.faction || "").toLowerCase();
+  $("g-faction").value = ["atreides", "harkonnen"].includes(house) ? house : "none";
   if (!keep) $("g-result").textContent = "";
   let d;
   try { d = await api(`/api/guilds/${id}`); } catch (e) { showResult("g-result", { ok: false, error: e.message }); return; }
@@ -274,6 +276,11 @@ async function openGuild(id, keep = false) {
 $("g-desc-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   await post(`/api/guilds/${W.guild}/describe`, { description: $("g-desc").value }, "g-result");
+  loadGuilds();
+});
+$("g-faction-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  await post(`/api/guilds/${W.guild}/faction`, { faction: $("g-faction").value }, "g-result");
   loadGuilds();
 });
 $("g-rename").addEventListener("click", async () => {

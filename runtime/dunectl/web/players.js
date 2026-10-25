@@ -154,6 +154,12 @@ $("rep-form").addEventListener("submit", (ev) => {
   act("faction-rep", { faction: $("rep-faction").value, amount: +$("rep-amount").value });
   $("rep-amount").value = "";
 });
+$("house-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const faction = $("house-faction").value;
+  const what = faction === "none" ? "leave their house (reputation is cleared)" : `join House ${faction[0].toUpperCase()}${faction.slice(1)}`;
+  if (confirm(`${P.current.name} will ${what}?`)) act("join-house", { faction, tier: +$("house-tier").value || 0 });
+});
 $("rename-form").addEventListener("submit", (ev) => {
   ev.preventDefault();
   const name = $("rename").value.trim();

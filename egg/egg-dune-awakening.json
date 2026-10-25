@@ -142,7 +142,7 @@
     },
     {
       "name": "Deep Desert Copies",
-      "description": "Extra Deep Desert instances players can pick, each always running (~5 GB of RAM). Copies above this number stay cold; their data is kept.",
+      "description": "Extra Deep Desert instances players can pick, each always running (~5 GB of RAM). 0 = only the main Deep Desert (no instance choice in game). Copies above this number are removed at the next restart.",
       "env_variable": "DEEP_DESERT_COPIES",
       "default_value": "1",
       "user_viewable": true,
@@ -152,7 +152,7 @@
     },
     {
       "name": "Arrakeen Copies",
-      "description": "Extra Arrakeen instances, each always running (~5 GB). Copies above this number stay cold.",
+      "description": "Extra Arrakeen instances, each always running (~5 GB). Copies above this number are removed at the next restart.",
       "env_variable": "ARRAKEEN_COPIES",
       "default_value": "0",
       "user_viewable": true,
@@ -162,7 +162,7 @@
     },
     {
       "name": "Harko Village Copies",
-      "description": "Extra Harko Village instances, each always running (~5 GB). Copies above this number stay cold.",
+      "description": "Extra Harko Village instances, each always running (~5 GB). Copies above this number are removed at the next restart.",
       "env_variable": "HARKO_COPIES",
       "default_value": "0",
       "user_viewable": true,
