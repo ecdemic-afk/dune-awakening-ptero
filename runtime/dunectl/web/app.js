@@ -72,7 +72,7 @@ const NAV = [
     ["vehicles", "Vehicles", "car", "Spawn a vehicle next to a player."],
     ["kits", "Kits & gifts", "gift", "Item bundles, gifts to everyone online, and the welcome gift."]]],
   ["World", [
-    ["map", "Map", "map", "Where everyone is, teleports, saved spots, resources and crashed ships."],
+    ["map", "Map", "map", "Where everyone is, teleports, saved spots and Deep Desert resources."],
     ["instances", "Instances", "layers", "Every running map with its players and memory. Start or stop maps."],
     ["bases", "Bases", "base", "Every base, its water and power. Refills."],
     ["guilds", "Guilds", "shield", "Members, leaders, invites."]]],

@@ -105,21 +105,6 @@ class WorldTools:
             raise RuntimeError((err or "map query failed").strip()[-300:])
         return admin_map.parse_markers(out)
 
-    def wrecks(self, key: str) -> list[dict]:
-        """Ships that crashed during play on this map (HaggaBasin / DeepDesert only)."""
-        if key not in ("HaggaBasin", "DeepDesert"):
-            return []
-        rows = self._csv(["map-wrecks", key], 20)
-        out = []
-        for r in rows:
-            try:
-                x, y, z = float(r["x"]), float(r["y"]), float(r["z"])
-            except (KeyError, ValueError):
-                continue
-            out.append({"id": r.get("id", ""), "class": r.get("class", ""), "partition": r.get("partition", ""),
-                        "x": x, "y": y, "z": z})
-        return out
-
     def resources(self, key: str) -> dict:
         """Deep Desert points of interest for the week's layout (12 fixed layouts, picked by the
         Coriolis seed; community-collected data via DST, Apache-2.0). Other maps have no data."""
