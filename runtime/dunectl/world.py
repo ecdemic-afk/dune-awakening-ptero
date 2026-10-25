@@ -107,16 +107,28 @@ class WorldTools:
 
     def resources(self, key: str) -> dict:
         """Deep Desert points of interest for the week's layout (12 fixed layouts, picked by the
-        Coriolis seed; community-collected data via DST, Apache-2.0). Other maps have no data."""
+        Coriolis seed; community-collected data via DST, Apache-2.0), plus on Hagga Basin and the
+        Deep Desert every spot a small ship can crash (crash_sites)."""
+        sites = self.crash_sites(key)
         if key != "DeepDesert":
-            return {"available": False,
+            return {"available": False, "crash_sites": sites,
                     "reason": "Resource locations are only known for the Deep Desert (it rotates through 12 fixed layouts)."}
         import admin_wickmaps
         rc, out, _ = self.run_op(["coriolis-seed"], 20)
         view = admin_wickmaps.deepdesert_view(self.base, parse_csv(out) if rc == 0 else [])
         if view["seed"] is None:
             view["reason"] = "The Deep Desert has not reported this week's layout yet (it needs to be running)."
-        return {"available": view["layout_available"], **view}
+        return {"available": view["layout_available"], "crash_sites": sites, **view}
+
+    def crash_sites(self, key: str) -> list:
+        """[[x, y, z], ...] where small ships can crash on this map. The crashes themselves are never
+        saved or logged with a position (SkipSaving), so these known spots are all a server can show."""
+        try:
+            with open(os.path.join(self.base, "data", "admin", "crash-sites.json"), encoding="utf-8") as fh:
+                sites = json.load(fh).get("maps", {}).get(key, [])
+        except (OSError, ValueError, AttributeError):
+            return []
+        return [p for p in sites if isinstance(p, list) and len(p) >= 2]
 
     # ---- positions, saved locations, vehicles ---------------------------
     def position(self, fls: str) -> dict:

@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -761,6 +762,18 @@ class WorldToolsTests(unittest.TestCase):
         self.assertEqual(self.calls[-1], ["guild-set-faction", "7", "harkonnen"])
         with self.assertRaises(ValueError):
             self.tools.guild_act("7", "faction", {"faction": "fremen"}, "x")
+
+    def test_crash_sites(self):
+        self.assertEqual(self.tools.crash_sites("HaggaBasin"), [])  # no data file: nothing, no error
+        shipped = os.path.join(os.path.dirname(SCRIPTS), "data", "admin", "crash-sites.json")
+        os.makedirs(os.path.join(self.base, "data", "admin"))
+        shutil.copy(shipped, os.path.join(self.base, "data", "admin"))
+        for key in ("HaggaBasin", "DeepDesert"):
+            _, _, x0, x1, y0, y1, _ = self.world.MAPS[key]
+            sites = self.tools.crash_sites(key)
+            self.assertGreater(len(sites), 10)
+            self.assertTrue(all(x0 <= x <= x1 and y0 <= y <= y1 for x, y, *_ in sites), key)
+        self.assertEqual(self.tools.resources("HaggaBasin")["crash_sites"], self.tools.crash_sites("HaggaBasin"))
 
     def test_refill_queues_when_the_map_runs(self):
         self.reply = (1, "", "[admin-publish] ERROR base-water-refill: HaggaBasin (partition 1) has 1 live server(s)")
