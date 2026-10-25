@@ -52,6 +52,7 @@
 #   db-sample <table> [limit=20]                 -- first N rows of a table (max 500)
 #   db-search <term>                             -- find tables/columns matching a term (ILIKE)
 #   db-sql <select-query>                        -- run a read-only query (SELECT/EXPLAIN/SHOW/WITH)
+#   log-search <text> [lines=40]                 -- last log lines containing <text> (all services + game servers)
 #
 # Player/character read subcommands (read-only; emit CSV for the admin UI's
 # Players tab). Queries ported from Icehunter/dune-admin cmd/dune-admin
@@ -1084,6 +1085,24 @@ SQL
         dune_psql -q --csv \
             -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY" \
             -c "$sql"
+        exit 0
+        ;;
+
+    log-search)
+        # Last matching lines across every service log and the game servers' own
+        # Unreal logs (exact text, not a regex). For finding what the game logs about
+        # something short-lived, e.g. a crashed ship. Secrets in the lines are masked.
+        needle="${1:?usage: log-search <text> [lines=40]}"
+        n="${2:-40}"
+        case "$n" in ''|*[!0-9]*) echo "[admin-publish] ERROR log-search: lines must be a number" >&2; exit 2 ;; esac
+        [ "$n" -le 500 ] || n=500
+        [ "${#needle}" -ge 3 ] || { echo "[admin-publish] ERROR log-search: give at least 3 characters" >&2; exit 2; }
+        found=$(grep -a -s -F -H -- "$needle" "$BASE"/logs/*.log "$BASE"/server/state/ue5-saved/Logs/*.log \
+                | tail -n "$n" \
+                | sed -E -e "s#^$BASE/##" -e 's/((AuthToken|Password|ServiceAuthKey)=)[^[:space:]"'"'"']+/\1***/g' \
+                         -e 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/***/g' \
+                | cut -c1-600)
+        if [ -z "$found" ]; then echo "no log line contains '$needle'"; else printf '%s\n' "$found"; fi
         exit 0
         ;;
 

@@ -754,6 +754,7 @@ class WorldToolsTests(unittest.TestCase):
         self.tools.run("kick", ["DE0BCCAA2501BF22"], "x")
         self.assertEqual(self.calls[-1], ["kick", "DE0BCCAA2501BF22"])
         self.assertIn("guild-set-faction", ops)
+        self.assertEqual([(a["name"], a["optional"]) for a in ops["log-search"]["args"]], [("text", False), ("lines", True)])
 
     def test_wrecks(self):
         self.reply = (0, "id,class,partition,x,y,z\n7,BP_ShipCrash_C,1,10.5,-20,3\n8,Bad,1,x,0,0\n", "")
