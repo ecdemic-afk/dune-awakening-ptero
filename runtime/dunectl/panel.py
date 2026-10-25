@@ -231,6 +231,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json(200, {"maps": world.maps()})
                 if path.startswith("/api/map/") and path.endswith("/resources"):
                     return self._json(200, world.resources(path.split("/")[3]))
+                if path.startswith("/api/map/") and path.endswith("/wrecks"):
+                    return self._json(200, {"wrecks": world.wrecks(path.split("/")[3])})
                 if path.startswith("/api/map/"):
                     return self._json(200, {"markers": world.markers(path[len("/api/map/"):])})
                 if path == "/api/welcome":

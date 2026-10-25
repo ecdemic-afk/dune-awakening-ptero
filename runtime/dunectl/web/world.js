@@ -45,7 +45,7 @@ async function loadMapPage() {
   }
   selectMap(W.map.key);
   clearInterval(W.mapTimer);
-  W.mapTimer = setInterval(() => { if (!$("tab-map").hidden) refreshMarkers(); }, 10000);
+  W.mapTimer = setInterval(() => { if (!$("tab-map").hidden) { refreshMarkers(); loadWrecks(); } }, 10000);
 }
 function selectMap(key) {
   W.map = W.maps.find((m) => m.key === key);
@@ -69,10 +69,37 @@ function drawGrid(on) {
   DD_ROWS.forEach((r, ri) => g.append(el("span", { className: "glabel", style: `left:.3%;top:${ri / 9 * 100 + 0.4}%`, textContent: r })));
   for (let c = 1; c <= 9; c++) g.append(el("span", { className: "glabel", style: `left:${(c - 0.5) / 9 * 100}%;top:.3%`, textContent: c }));
 }
+// Ships that crash during play (Hagga Basin and Deep Desert); they come and go, so refreshed with the dots.
+const CRASH_MAPS = ["HaggaBasin", "DeepDesert"];
+async function loadWrecks() {
+  const key = W.map.key;
+  if (!CRASH_MAPS.includes(key)) { W.wrecks = []; drawWrecks(); return; }
+  try { const r = await api(`/api/map/${key}/wrecks`); if (W.map.key === key) W.wrecks = r.wrecks; }
+  catch (_) { if (W.map.key === key) W.wrecks = null; }
+  drawWrecks();
+}
+function drawWrecks() {
+  const layer = $("map-wrecks"); layer.replaceChildren();
+  const count = $("map-wreck-count"); count.replaceChildren();
+  if (!CRASH_MAPS.includes(W.map.key)) return;
+  if (W.wrecks === null) { count.textContent = "Crashed ships: couldn't read them."; return; }
+  const list = W.wrecks || [];
+  count.append(el("span", { className: "lg" }, el("img", { src: ICON("wreck"), alt: "", className: "crash" }),
+    document.createTextNode(` Crashed ships ${list.length}`)));
+  if (!$("map-res").checked) return;
+  for (const w of list) {
+    const p = project(w.x, w.y, W.map);
+    if (!p.inside) continue;
+    const where = W.map.key === "DeepDesert" ? ` — sector ${sector(p)}` : "";
+    layer.append(el("img", { className: "poi crash", src: ICON("wreck"), alt: "Crashed ship",
+      title: `Crashed ship${where} (${Math.round(w.x)}, ${Math.round(w.y)})\n${w.class}`, style: `left:${p.left}%;top:${p.top}%` }));
+  }
+}
 async function loadResources() {
   const key = W.map.key;
   W.resources = null; $("map-pois").replaceChildren(); $("map-legend").replaceChildren();
-  $("map-res-toggle").hidden = key !== "DeepDesert";
+  $("map-res-toggle").hidden = !CRASH_MAPS.includes(key);
+  W.wrecks = []; loadWrecks();
   drawGrid(key === "DeepDesert");
   if (key !== "DeepDesert") return;
   let r;
@@ -104,7 +131,7 @@ function drawResources() {
       style: `left:${((col - 1) + (sx - 0.5) / 4) / 9 * 100}%;top:${(ri + (sy + 0.5) / 4) / 9 * 100}%` }));
   }
 }
-$("map-res").addEventListener("change", drawResources);
+$("map-res").addEventListener("change", () => { drawResources(); drawWrecks(); });
 
 // Click-to-teleport. TeleportTo has no map: it moves a player within the map they are on, so only
 // players on this map are offered, and the game snaps them to the nearest safe spot.

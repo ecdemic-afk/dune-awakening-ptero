@@ -2820,6 +2820,33 @@ ORDER BY name
 SQL
         exit 0
         ;;
+    map-wrecks)
+        # Ships that crashed during play (random crash sites, gone once a worm takes
+        # them), read-only. They are world actors saved like any other; matched by
+        # class name since Funcom names them by what they are (crash / wreck).
+        # Player actors are excluded in case a cosmetic ever borrows the word.
+        map_name="${1:?map name required: HaggaBasin|DeepDesert}"
+        case "$map_name" in
+            HaggaBasin|DeepDesert) ;;
+            *) echo "[admin-publish] ERROR map-wrecks: unsupported map '$map_name'" >&2; exit 2 ;;
+        esac
+        dune_require_tables dune.actors || exit 3
+        dune_psql_q --csv --set=map="$map_name" <<'SQL'
+SELECT a.id AS id,
+       a.class AS class,
+       COALESCE(a.partition_id, 0) AS partition,
+       ((a.transform).location).x AS x,
+       ((a.transform).location).y AS y,
+       ((a.transform).location).z AS z
+FROM dune.actors a
+WHERE a.map = :'map' AND a.transform IS NOT NULL
+  AND (a.class ILIKE '%crash%' OR a.class ILIKE '%wreck%')
+  AND a.class NOT ILIKE '%player%'
+ORDER BY a.id
+LIMIT 500
+SQL
+        exit 0
+        ;;
     tags-get)
         # Player progression tags, ported verbatim from dune-admin. Keyed on
         # the confirmed account id.

@@ -357,7 +357,13 @@ table.inv input { width: 5.5rem; }
 .actions input[type="checkbox"], .sched-row input[type="checkbox"] { flex: none; }
 
 /* map overlays */
-#map-grid, #map-pois { position: absolute; inset: 0; pointer-events: none; }
+#map-grid, #map-pois, #map-wrecks { position: absolute; inset: 0; pointer-events: none; }
+/* a ship that crashed during play: the wreck icon in a pulsing spice ring, so it reads apart from fixed wrecks */
+.poi.crash { width: 20px; height: 20px; margin: -10px 0 0 -10px; padding: 2px; border-radius: 50%;
+  background: rgb(20 14 8 / .75); box-shadow: 0 0 0 2px var(--accent); animation: crash-pulse 2s ease-in-out infinite; }
+@keyframes crash-pulse { 50% { box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px rgb(224 136 60 / .25); } }
+@media (prefers-reduced-motion: reduce) { .poi.crash { animation: none; } }
+.lg img.crash { border-radius: 50%; box-shadow: 0 0 0 2px var(--accent); }
 .gline { position: absolute; background: rgb(255 255 255 / .28); }
 .gline.v { top: 0; bottom: 0; width: 1px; }
 .gline.h { left: 0; right: 0; height: 1px; }

@@ -755,6 +755,13 @@ class WorldToolsTests(unittest.TestCase):
         self.assertEqual(self.calls[-1], ["kick", "DE0BCCAA2501BF22"])
         self.assertIn("guild-set-faction", ops)
 
+    def test_wrecks(self):
+        self.reply = (0, "id,class,partition,x,y,z\n7,BP_ShipCrash_C,1,10.5,-20,3\n8,Bad,1,x,0,0\n", "")
+        self.assertEqual(self.tools.wrecks("HaggaBasin"),
+                         [{"id": "7", "class": "BP_ShipCrash_C", "partition": "1", "x": 10.5, "y": -20.0, "z": 3.0}])
+        self.assertEqual(self.calls[-1], ["map-wrecks", "HaggaBasin"])
+        self.assertEqual(self.tools.wrecks("Arrakeen"), [])  # no crashes in the cities: no query
+
     def test_guild_faction(self):
         self.tools.guild_act("7", "faction", {"faction": "Harkonnen"}, "x")
         self.assertEqual(self.calls[-1], ["guild-set-faction", "7", "harkonnen"])
