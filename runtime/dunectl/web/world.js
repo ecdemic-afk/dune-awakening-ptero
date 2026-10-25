@@ -72,14 +72,13 @@ function drawGrid(on) {
 async function loadResources() {
   const key = W.map.key;
   W.resources = null; $("map-pois").replaceChildren(); $("map-legend").replaceChildren();
-  const has = ["HaggaBasin", "DeepDesert"].includes(key);
   $("map-res-toggle").hidden = key !== "DeepDesert";
-  $("map-crash-toggle").hidden = !has;
   drawGrid(key === "DeepDesert");
-  if (!has) return;
+  if (key !== "DeepDesert") return;
   let r;
   try { r = await api(`/api/map/${key}/resources`); } catch (e) { $("map-legend").textContent = e.message; return; }
   if (W.map.key !== key) return;
+  if (!r.available) { $("map-legend").textContent = r.reason || "This week's layout is not known."; return; }
   W.resources = r;
   drawResources();
 }
@@ -87,42 +86,25 @@ function drawResources() {
   const pois = $("map-pois"); pois.replaceChildren();
   const legend = $("map-legend"); legend.replaceChildren();
   const r = W.resources;
-  if (!r) return;
-  const sites = r.crash_sites || [];
-  const layout = W.map.key === "DeepDesert" && r.available ? r.layout : null;
-  if (layout) {
-    legend.append(el("span", { className: "muted", textContent: `Layout ${r.seed} of 12${layout.confidence ? ` (${layout.confidence.toLowerCase()})` : ""}:` }));
-    for (const l of layout.legend || []) legend.append(el("span", { className: "lg" }, el("img", { src: ICON(l.type), alt: "" }), document.createTextNode(` ${l.label} ${l.count}`)));
-  } else if (W.map.key === "DeepDesert") {
-    legend.append(el("span", { className: "muted", textContent: r.reason || "This week's layout is not known." }));
-  }
-  if (sites.length) legend.append(el("span", { className: "lg", title: "Every spot a small ship can crash. Which one is active right now is only known in game." },
-    el("img", { src: ICON("wreck"), alt: "", className: "crash" }), document.createTextNode(` Possible ship crashes ${sites.length}`)));
-  // Possible small-ship crash spots, under the week's points of interest. Not live: see WorldTools.crash_sites.
-  for (const [x, y] of $("map-crash").checked ? sites : []) {
-    const p = project(x, y, W.map);
-    if (!p.inside) continue;
-    const where = W.map.key === "DeepDesert" ? ` — sector ${sector(p)}` : "";
-    pois.append(el("img", { className: "poi crash", src: ICON("wreck"), alt: "Possible ship crash",
-      title: `Possible small-ship crash site${where}`, style: `left:${p.left}%;top:${p.top}%` }));
-  }
-  if (!layout || !$("map-res").checked) return;
-  for (const s of layout.largeSpiceSectors || []) {
+  if (!r || W.map.key !== "DeepDesert") return;
+  legend.append(el("span", { className: "muted", textContent: `Layout ${r.seed} of 12${r.layout.confidence ? ` (${r.layout.confidence.toLowerCase()})` : ""}:` }));
+  for (const l of r.layout.legend || []) legend.append(el("span", { className: "lg" }, el("img", { src: ICON(l.type), alt: "" }), document.createTextNode(` ${l.label} ${l.count}`)));
+  if (!$("map-res").checked) return;
+  for (const s of r.layout.largeSpiceSectors || []) {
     const ri = DD_ROWS.indexOf(s[0]), col = +s.slice(1);
     if (ri < 0 || !(col >= 1 && col <= 9)) continue;
     pois.append(el("div", { className: "spice-cell", title: `Large spice field — sector ${s}`, style: `left:${(col - 1) / 9 * 100}%;top:${ri / 9 * 100}%` }));
   }
-  for (const p of layout.pois || []) {
+  for (const p of r.layout.pois || []) {
     const ri = DD_ROWS.indexOf(String(p.sector)[0]), col = +String(p.sector).slice(1);
     if (ri < 0 || !(col >= 1 && col <= 9)) continue;
     const sx = Math.min(4, Math.max(1, p.subx)), sy = Math.min(3, Math.max(0, p.suby));
-    const label = (layout.legend || []).find((l) => l.type === p.type)?.label || p.type;
+    const label = (r.layout.legend || []).find((l) => l.type === p.type)?.label || p.type;
     pois.append(el("img", { className: "poi", src: ICON(p.type), alt: label, title: `${label} — sector ${p.sector}`,
       style: `left:${((col - 1) + (sx - 0.5) / 4) / 9 * 100}%;top:${(ri + (sy + 0.5) / 4) / 9 * 100}%` }));
   }
 }
 $("map-res").addEventListener("change", drawResources);
-$("map-crash").addEventListener("change", drawResources);
 
 // Click-to-teleport. TeleportTo has no map: it moves a player within the map they are on, so only
 // players on this map are offered, and the game snaps them to the nearest safe spot.
