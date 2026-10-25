@@ -53,6 +53,8 @@
 #   db-search <term>                             -- find tables/columns matching a term (ILIKE)
 #   db-sql <select-query>                        -- run a read-only query (SELECT/EXPLAIN/SHOW/WITH)
 #   log-search <text> [lines=40]                 -- last log lines containing <text> (all services + game servers)
+#   coriolis-now                                 -- DESTRUCTIVE: the Coriolis wipes the Deep Desert when it next starts (restart to run it)
+#   coriolis-cancel                              -- call off a waiting coriolis-now before the Deep Desert restarts
 #
 # Player/character read subcommands (read-only; emit CSV for the admin UI's
 # Players tab). Queries ported from Icehunter/dune-admin cmd/dune-admin
@@ -4131,6 +4133,67 @@ SQL
         echo "publish=ok svc-restart $svc"
         exit 0
         ;;
+    coriolis-now|coriolis-cancel)
+        # Arm (or disarm) a Coriolis reset of the Deep Desert at its next start.
+        # The game wipes a map in coriolis_update_seed, which every server calls at
+        # boot with the cycle's seed: when the seed stored for the map/partition
+        # differs (or is missing), it runs the cleanups (DD actors deleted, vehicles
+        # to recovery, players there DeadByCoriolis and moved to Hagga, markers and
+        # resource fields cleared). So arming = store a seed no cycle uses (-2); the
+        # next Deep Desert boot then runs Funcom's own wipe. The farm seed is included
+        # so the per-player Coriolis processing resets like a real cycle. The previous
+        # seeds are kept in server/state/coriolis-armed so coriolis-cancel can put them back.
+        dune_require_tables dune.world_farm_reset_seed dune.world_map_reset_seed dune.world_partition_reset_seed dune.world_partition || exit 3
+        armed_file="$BASE/server/state/coriolis-armed"
+        cur=$(dune_psql_q -tA -F'|' <<'SQL' | tr -d '\r'
+SELECT COALESCE((SELECT world_reset_seed::text FROM dune.world_farm_reset_seed WHERE onerow_id LIMIT 1), ''),
+       COALESCE((SELECT world_reset_seed::text FROM dune.world_map_reset_seed WHERE map LIKE 'DeepDesert%' ORDER BY map LIMIT 1), ''),
+       COALESCE((SELECT s.world_reset_seed::text FROM dune.world_partition_reset_seed s
+                 JOIN dune.world_partition p USING (partition_id) WHERE p.map LIKE 'DeepDesert%' ORDER BY p.partition_id LIMIT 1), ''),
+       EXISTS (SELECT 1 FROM dune.world_map_reset_seed WHERE map LIKE 'DeepDesert%' AND world_reset_seed = -2)
+       OR EXISTS (SELECT 1 FROM dune.world_partition_reset_seed s JOIN dune.world_partition p USING (partition_id)
+                  WHERE p.map LIKE 'DeepDesert%' AND s.world_reset_seed = -2)
+SQL
+)
+        IFS='|' read -r cur_farm cur_map cur_part armed <<<"$cur"
+        if [ "$cmd" = "coriolis-cancel" ]; then
+            if [ "$armed" != "t" ]; then
+                rm -f "$armed_file"
+                echo "nothing to cancel: no Coriolis reset is waiting (a Deep Desert start already ran it, or none was started)"
+                exit 0
+            fi
+            IFS='|' read -r old_farm old_map old_part < "$armed_file" 2>/dev/null || true
+            dune_psql_q -q -v ON_ERROR_STOP=1 --set=f="${old_farm:-}" --set=m="${old_map:-}" --set=pt="${old_part:-}" >/dev/null <<'SQL' || { echo "[admin-publish] ERROR coriolis-cancel: DB update failed (rolled back)" >&2; exit 1; }
+BEGIN;
+UPDATE dune.world_farm_reset_seed SET world_reset_seed = NULLIF(:'f', '')::int WHERE onerow_id AND world_reset_seed = -2;
+UPDATE dune.world_map_reset_seed SET world_reset_seed = NULLIF(:'m', '')::int WHERE map LIKE 'DeepDesert%';
+UPDATE dune.world_partition_reset_seed SET world_reset_seed = NULLIF(:'pt', '')::int
+ WHERE partition_id IN (SELECT partition_id FROM dune.world_partition WHERE map LIKE 'DeepDesert%');
+COMMIT;
+SQL
+            rm -f "$armed_file"
+            echo "[admin-publish] OK coriolis-cancel: the Deep Desert will not be reset at its next start"
+            echo "publish=db-write coriolis-cancel"
+            exit 0
+        fi
+        if [ "$armed" = "t" ]; then
+            echo "a Coriolis reset is already waiting: it runs when the Deep Desert next starts (restart the server)"
+            exit 0
+        fi
+        printf '%s|%s|%s\n' "$cur_farm" "$cur_map" "$cur_part" > "$armed_file"
+        dune_psql_q -q -v ON_ERROR_STOP=1 >/dev/null <<'SQL' || { rm -f "$armed_file"; echo "[admin-publish] ERROR coriolis-now: DB update failed (rolled back)" >&2; exit 1; }
+BEGIN;
+UPDATE dune.world_farm_reset_seed SET world_reset_seed = -2 WHERE onerow_id;
+UPDATE dune.world_map_reset_seed SET world_reset_seed = -2 WHERE map LIKE 'DeepDesert%';
+UPDATE dune.world_partition_reset_seed SET world_reset_seed = -2
+ WHERE partition_id IN (SELECT partition_id FROM dune.world_partition WHERE map LIKE 'DeepDesert%');
+COMMIT;
+SQL
+        echo "[admin-publish] OK coriolis-now: the Deep Desert is reset by the Coriolis when it next starts — restart the server to run it now"
+        echo "publish=db-write coriolis-now"
+        exit 0
+        ;;
+
     coriolis-seed)
         # Read-only: the active Coriolis world seed per Deep Desert map, so
         # the Wick Maps view can pick the matching pre-collected POI layout

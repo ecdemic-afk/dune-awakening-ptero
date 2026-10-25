@@ -755,6 +755,8 @@ class WorldToolsTests(unittest.TestCase):
         self.assertEqual(self.calls[-1], ["kick", "DE0BCCAA2501BF22"])
         self.assertIn("guild-set-faction", ops)
         self.assertEqual([(a["name"], a["optional"]) for a in ops["log-search"]["args"]], [("text", False), ("lines", True)])
+        self.assertTrue(ops["coriolis-now"]["danger"])
+        self.assertEqual(ops["coriolis-cancel"]["args"], [])
 
     def test_guild_faction(self):
         self.tools.guild_act("7", "faction", {"faction": "Harkonnen"}, "x")

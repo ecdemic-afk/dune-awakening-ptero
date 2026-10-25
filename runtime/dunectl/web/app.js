@@ -194,6 +194,21 @@ document.querySelectorAll("[data-timed]").forEach((b) => b.addEventListener("cli
   if (!confirm(`${label}${when === "now" ? " now" : `, with a ${when} countdown if players are on`}?`)) return;
   run(`${b.dataset.timed} ${when === "now" ? "now" : "in " + when}${reason ? " " + reason : ""}`);
 }));
+// Coriolis on demand: mark the Deep Desert for the game's own Coriolis wipe, then restart so it runs.
+$("ov-coriolis").addEventListener("click", async () => {
+  const when = $("countdown").value;
+  if (!confirm("Run the Coriolis on the Deep Desert now?\n\nLike the weekly storm, it wipes the Deep Desert: bases and items "
+    + "there are deleted, vehicles go to recovery, and anyone in it dies and wakes in Hagga Basin. A new layout is used "
+    + "only if one is set in Settings (Forced Coriolis World Seed).\n\nThe whole server restarts"
+    + (when === "now" ? " now." : `, with a ${when} countdown if players are on.`))) return;
+  $("action-result").textContent = "";
+  let r;
+  try { r = await api("/api/ops", { op: "coriolis-now", args: [] }); } catch (e) { $("action-result").textContent = e.message; return; }
+  if (!r.ok) { $("action-result").textContent = r.output; return; }
+  await run(`restart ${when === "now" ? "now" : "in " + when} Coriolis storm`);
+  $("action-result").textContent += " If you cancel this restart, the Coriolis still runs at the next one — "
+    + "call it off on the Commands page (coriolis-cancel).";
+});
 $("announce-form").addEventListener("submit", (ev) => {
   ev.preventDefault();
   const msg = $("announce").value.trim();
